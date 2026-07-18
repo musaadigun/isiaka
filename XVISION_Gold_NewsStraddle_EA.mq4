@@ -1,9 +1,19 @@
 #property strict
-#property version   "2.00"
-#property description "XVISION Gold News Straddle V7 - panel-driven straddle with CLOSE/CANCEL, mode selector, diagnostics"
+#property version   "8.00"
+#property description "XVISION Gold News Straddle V8 - panel-driven straddle with CLOSE/CANCEL, mode selector, diagnostics"
 
 // ============================================================================
-// XVISION GOLD NEWS-STRADDLE EA VERSION 2
+// XVISION GOLD NEWS-STRADDLE EA VERSION 8
+//
+// V8 FIXES
+// - Panel LOT override is now actually used when sending orders (V7 sent
+//   the LotSize input regardless of the panel value).
+// - CANCEL SETUP now sets a dedicated CANCELLED state that the stale-state
+//   cleaner respects, so a pre-window cancel no longer silently re-arms.
+// - Buy/Sell TP and SL inputs are honoured per side (V7 averaged them).
+// - NewsDateTimeGMT parsing is genuinely strict: malformed input is
+//   rejected instead of resolving to an unintended datetime.
+// - Arming is blocked with a visible reason when autotrading is disabled.
 //
 // TIME STANDARD
 // NewsDateTimeGMT is entered strictly in GMT/UTC as YYYY.MM.DD HH:MI.
@@ -95,8 +105,9 @@ input color  WarningColor                      = clrOrange;
 #define STATE_COMPLETE  3
 #define STATE_EXPIRED   4
 #define STATE_ERROR     5
+#define STATE_CANCELLED 6
 
-string   PREFIX="XV_GOLD_NS_EA_V7_";
+string   PREFIX="XV_GOLD_NS_EA_V8_";
 datetime g_newsGMT=0;
 datetime g_placeGMT=0;
 datetime g_expiryGMT=0;
@@ -108,7 +119,9 @@ int      g_lastTriggerAlertTicket=-1;
 string   g_lastAction="INITIALISING";
 double   g_workLot=0.0;
 double   g_workBuyDist=0.0, g_workSellDist=0.0;
-double   g_workTP=0.0, g_workSL=0.0, g_workTrail=0.0;
+double   g_workBuyTP=0.0, g_workSellTP=0.0;
+double   g_workBuySL=0.0, g_workSellSL=0.0;
+double   g_workTrail=0.0;
 double   g_workBE=0.0;          // break-even activation (0 = BE disabled)
 int      g_workMode=1;          // 0 FIXED_TP, 1 TRAILING_ONLY, 2 TP+TRAILING
 string   g_blockReason="";
@@ -121,8 +134,10 @@ int OnInit()
    g_workLot=LotSize;
    g_workBuyDist=BuyStopDistanceMovement;
    g_workSellDist=SellStopDistanceMovement;
-   g_workTP=(BuyTakeProfitMovement+SellTakeProfitMovement)/2.0;
-   g_workSL=(BuyStopLossMovement+SellStopLossMovement)/2.0;
+   g_workBuyTP=BuyTakeProfitMovement;
+   g_workSellTP=SellTakeProfitMovement;
+   g_workBuySL=BuyStopLossMovement;
+   g_workSellSL=SellStopLossMovement;
    g_workTrail=TrailingStopDistanceMovement;
    g_workBE=(MoveToBreakEvenFirst?BreakEvenActivationMovement:0.0);
    g_workMode=(int)ExitMode;
@@ -143,7 +158,7 @@ int OnInit()
    if(ForceResetEventState && GlobalVariableCheck(g_globalStateName))
    {
       GlobalVariableDel(g_globalStateName);
-      Print("XVISION News Straddle V7: stored event state force-cleared.");
+      Print("XVISION News Straddle V8: stored event state force-cleared.");
    }
 
    SynchroniseState();
@@ -204,16 +219,16 @@ bool ValidateInputs()
                           ExitMode==EXIT_FIXED_TP_AND_TRAILING);
 
    if(EnableBuyStop &&
-      (g_workBuyDist<=0.0 || g_workSL<=0.0 ||
-       (fixedTPRequired && g_workTP<=0.0)))
+      (g_workBuyDist<=0.0 || g_workBuySL<=0.0 ||
+       (fixedTPRequired && g_workBuyTP<=0.0)))
    {
       Print("BUY distance and SL must be greater than zero. BUY TP must also be positive when fixed TP is enabled.");
       return(false);
    }
 
    if(EnableSellStop &&
-      (g_workSellDist<=0.0 || g_workSL<=0.0 ||
-       (fixedTPRequired && g_workTP<=0.0)))
+      (g_workSellDist<=0.0 || g_workSellSL<=0.0 ||
+       (fixedTPRequired && g_workSellTP<=0.0)))
    {
       Print("SELL distance and SL must be greater than zero. SELL TP must also be positive when fixed TP is enabled.");
       return(false);
@@ -246,6 +261,10 @@ bool ValidateInputs()
    return(true);
 }
 
+// Accepts only a complete "YYYY.MM.DD HH:MI" ('-' and 'T' separators are
+// tolerated). StringToTime() alone is lenient - an empty or mangled string
+// resolves to a plausible datetime for today - so the parsed value is
+// round-tripped through TimeToString() and must reproduce the input.
 datetime ParseStrictGMT(string value)
 {
    string cleaned=value;
@@ -253,7 +272,15 @@ datetime ParseStrictGMT(string value)
    StringTrimRight(cleaned);
    StringReplace(cleaned,"-",".");
    StringReplace(cleaned,"T"," ");
-   return(StringToTime(cleaned));
+
+   datetime parsed=StringToTime(cleaned);
+   if(parsed<=0)
+      return(0);
+
+   if(TimeToString(parsed,TIME_DATE|TIME_MINUTES)!=cleaned)
+      return(0);
+
+   return(parsed);
 }
 
 void RunEngine()
@@ -286,7 +313,7 @@ void RunEngine()
       nowGMT>=g_placeGMT-60 && nowGMT<g_placeGMT)
    {
       g_heartbeatSent=true;
-      Notify("XVISION News Straddle V7 alive | arming in <=60s | "+EventName+
+      Notify("XVISION News Straddle V8 alive | arming in <=60s | "+EventName+
              " | spread "+DoubleToString(Ask-Bid,Digits));
    }
 
@@ -301,14 +328,14 @@ void RunEngine()
       nowGMT>=g_placeGMT && nowGMT<g_expiryGMT && g_state==STATE_WAITING)
    {
       g_notifiedReason=g_blockReason;
-      Notify("XVISION News Straddle V7 ARM BLOCKED | "+EventName+" | "+g_blockReason);
+      Notify("XVISION News Straddle V8 ARM BLOCKED | "+EventName+" | "+g_blockReason);
    }
 
    // V3: loud alarm if the news moment arrives with nothing armed
    if(!g_missedNotified && g_state==STATE_WAITING && nowGMT>=g_newsGMT)
    {
       g_missedNotified=true;
-      Notify("XVISION News Straddle V7 WINDOW MISSED | "+EventName+
+      Notify("XVISION News Straddle V8 WINDOW MISSED | "+EventName+
              " | last block: "+(g_blockReason==""?"none recorded":g_blockReason));
    }
 
@@ -324,12 +351,16 @@ bool CanPlaceNow(datetime nowGMT)
    { g_blockReason="event orders already exist"; return(false); }
 
    if(g_state==STATE_PENDING || g_state==STATE_ACTIVE ||
-      g_state==STATE_COMPLETE || g_state==STATE_EXPIRED)
+      g_state==STATE_COMPLETE || g_state==STATE_EXPIRED ||
+      g_state==STATE_CANCELLED)
    { g_blockReason="state="+StateText()+" vetoes arming"; return(false); }
 
    if(GlobalVariableCheck(g_globalStateName) &&
       GlobalVariableGet(g_globalStateName)>=STATE_PENDING)
    { g_blockReason="stored terminal state vetoes arming"; return(false); }
+
+   if(!IsTradeAllowed())
+   { g_blockReason="autotrading disabled in terminal"; return(false); }
 
    if(nowGMT<g_placeGMT)
    { g_blockReason="before placement time"; return(false); }
@@ -371,7 +402,7 @@ bool PlaceNewsStraddle()
    if(EnableBuyStop)
    {
       double buyPrice=NormalizeDouble(Ask+g_workBuyDist,Digits);
-      double buySL=NormalizeDouble(buyPrice-g_workSL,Digits);
+      double buySL=NormalizeDouble(buyPrice-g_workBuySL,Digits);
       double buyTP=InitialTakeProfit(OP_BUY,buyPrice);
 
       if(!PendingGeometryIsValid(OP_BUYSTOP,buyPrice,buySL,buyTP))
@@ -380,7 +411,7 @@ bool PlaceNewsStraddle()
          return(false);
       }
 
-      buyTicket=SendPendingOrder(OP_BUYSTOP,buyPrice,buySL,buyTP,g_eventToken+"_B",BuyColor);
+      buyTicket=SendPendingOrder(OP_BUYSTOP,lots,buyPrice,buySL,buyTP,g_eventToken+"_B",BuyColor);
       if(buyTicket<0 && RequireBothPendingOrders)
       {
          g_lastAction="BUY STOP PLACEMENT FAILED";
@@ -393,23 +424,23 @@ bool PlaceNewsStraddle()
       RefreshRates();
 
       double sellPrice=NormalizeDouble(Bid-g_workSellDist,Digits);
-      double sellSL=NormalizeDouble(sellPrice+g_workSL,Digits);
+      double sellSL=NormalizeDouble(sellPrice+g_workSellSL,Digits);
       double sellTP=InitialTakeProfit(OP_SELL,sellPrice);
 
       if(!PendingGeometryIsValid(OP_SELLSTOP,sellPrice,sellSL,sellTP))
       {
-         if(buyTicket>0 && RequireBothPendingOrders)
+         if(buyTicket>=0 && RequireBothPendingOrders)
             DeleteOrderByTicket(buyTicket);
 
          g_lastAction="SELL LEVELS VIOLATE BROKER MINIMUM";
          return(false);
       }
 
-      sellTicket=SendPendingOrder(OP_SELLSTOP,sellPrice,sellSL,sellTP,g_eventToken+"_S",SellColor);
+      sellTicket=SendPendingOrder(OP_SELLSTOP,lots,sellPrice,sellSL,sellTP,g_eventToken+"_S",SellColor);
 
       if(sellTicket<0 && RequireBothPendingOrders)
       {
-         if(buyTicket>0)
+         if(buyTicket>=0)
             DeleteOrderByTicket(buyTicket);
 
          g_lastAction="SELL STOP PLACEMENT FAILED";
@@ -417,8 +448,8 @@ bool PlaceNewsStraddle()
       }
    }
 
-   bool buyOK=(!EnableBuyStop || buyTicket>0);
-   bool sellOK=(!EnableSellStop || sellTicket>0);
+   bool buyOK=(!EnableBuyStop || buyTicket>=0);
+   bool sellOK=(!EnableSellStop || sellTicket>=0);
 
    if(!buyOK && !sellOK)
    {
@@ -428,8 +459,8 @@ bool PlaceNewsStraddle()
 
    if(RequireBothPendingOrders && (!buyOK || !sellOK))
    {
-      if(buyTicket>0) DeleteOrderByTicket(buyTicket);
-      if(sellTicket>0) DeleteOrderByTicket(sellTicket);
+      if(buyTicket>=0) DeleteOrderByTicket(buyTicket);
+      if(sellTicket>=0) DeleteOrderByTicket(sellTicket);
       g_lastAction="BOTH ORDERS REQUIRED";
       return(false);
    }
@@ -437,7 +468,7 @@ bool PlaceNewsStraddle()
    SetState(STATE_PENDING);
    g_lastAction="STRADDLE ARMED";
 
-   Notify("XVISION News Straddle V7 armed | "+EventName+
+   Notify("XVISION News Straddle V8 armed | "+EventName+
           " | News GMT "+TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES)+
           " | Buy ticket "+IntegerToString(buyTicket)+
           " | Sell ticket "+IntegerToString(sellTicket));
@@ -446,6 +477,7 @@ bool PlaceNewsStraddle()
 }
 
 int SendPendingOrder(int orderType,
+                     double lots,
                      double entryPrice,
                      double stopLoss,
                      double takeProfit,
@@ -454,7 +486,7 @@ int SendPendingOrder(int orderType,
 {
    ResetLastError();
 
-   int ticket=OrderSend(Symbol(),orderType,NormalizeLots(LotSize),entryPrice,
+   int ticket=OrderSend(Symbol(),orderType,lots,entryPrice,
                         SlippagePoints,stopLoss,takeProfit,orderComment,
                         MagicNumber,0,arrowColor);
 
@@ -467,7 +499,7 @@ int SendPendingOrder(int orderType,
    // ECN fallback: place without protection, then attach TP/SL immediately.
    if(firstError==130)
    {
-      ticket=OrderSend(Symbol(),orderType,NormalizeLots(LotSize),entryPrice,
+      ticket=OrderSend(Symbol(),orderType,lots,entryPrice,
                        SlippagePoints,0,0,orderComment,MagicNumber,0,arrowColor);
 
       if(ticket<0)
@@ -550,7 +582,7 @@ void ManageTriggeredTrades()
       string side=(survivorType==OP_BUY)?"BUY":"SELL";
       g_lastAction=side+" TRIGGERED";
 
-      Notify("XVISION News Straddle V7 "+side+" triggered | Ticket "+
+      Notify("XVISION News Straddle V8 "+side+" triggered | Ticket "+
              IntegerToString(survivorTicket)+" | Fill "+
              DoubleToString(OrderOpenPrice(),Digits));
    }
@@ -653,17 +685,17 @@ double InitialTakeProfit(int marketType,double entryPrice)
       return(0.0);
 
    if(marketType==OP_BUY)
-      return(NormalizeDouble(entryPrice+g_workTP,Digits));
+      return(NormalizeDouble(entryPrice+g_workBuyTP,Digits));
 
-   return(NormalizeDouble(entryPrice-g_workTP,Digits));
+   return(NormalizeDouble(entryPrice-g_workSellTP,Digits));
 }
 
 double InitialStopLoss(int marketType,double entryPrice)
 {
    if(marketType==OP_BUY)
-      return(NormalizeDouble(entryPrice-g_workSL,Digits));
+      return(NormalizeDouble(entryPrice-g_workBuySL,Digits));
 
-   return(NormalizeDouble(entryPrice+g_workSL,Digits));
+   return(NormalizeDouble(entryPrice+g_workSellSL,Digits));
 }
 
 bool UsesTrailingStop()
@@ -899,7 +931,7 @@ void ExpirePendingOrders()
       if(deleted>0)
       {
          g_lastAction="UNTRIGGERED ORDERS EXPIRED";
-         Notify("XVISION News Straddle V7 expired without a trigger | "+EventName);
+         Notify("XVISION News Straddle V8 expired without a trigger | "+EventName);
       }
    }
 }
@@ -975,7 +1007,9 @@ void SynchroniseState()
       // V3 FIX: a stored PENDING/EXPIRED/etc with NO live orders and NO history
       // for a window that has not even opened yet is stale residue from an
       // earlier attach/test. It must not veto a fresh upcoming event.
-      if(stored>=STATE_PENDING && TimeGMT()<g_placeGMT)
+      // V8: CANCELLED is a deliberate user decision, never stale residue -
+      // clearing it here would silently re-arm a cancelled event.
+      if(stored>=STATE_PENDING && stored!=STATE_CANCELLED && TimeGMT()<g_placeGMT)
       {
          GlobalVariableDel(g_globalStateName);
          g_state=STATE_WAITING;
@@ -1107,10 +1141,12 @@ void UpdatePanel()
       PanelText,83,false);
 
    UpsertPanelLabel(PREFIX+"L5",
-      "LOT: "+DoubleToString(NormalizeLots(LotSize),LotDigits())+
+      "LOT: "+DoubleToString(NormalizeLots(g_workLot),LotDigits())+
       "  |  EXIT: "+ModeShort(g_workMode)+
-      "  |  INITIAL SL B/S: "+DoubleToString(g_workSL,1)+
-      "/"+DoubleToString(g_workSL,1),
+      "  |  SL B/S: "+DoubleToString(g_workBuySL,1)+
+      "/"+DoubleToString(g_workSellSL,1)+
+      "  |  TP B/S: "+DoubleToString(g_workBuyTP,1)+
+      "/"+DoubleToString(g_workSellTP,1),
       PanelText,100,false);
 
    UpsertPanelLabel(PREFIX+"L6",
@@ -1139,17 +1175,6 @@ double FindOpenOrderPrice(int requestedType)
    return(0.0);
 }
 
-string ExitModeText()
-{
-   if(g_workMode==EXIT_TRAILING_ONLY)
-      return("TRAILING ONLY");
-
-   if(ExitMode==EXIT_FIXED_TP_AND_TRAILING)
-      return("FIXED TP + TRAILING");
-
-   return("FIXED TP");
-}
-
 string BreakEvenText()
 {
    if(!MoveToBreakEvenFirst)
@@ -1166,6 +1191,7 @@ string StateText()
    if(g_state==STATE_ACTIVE)   return("TRADE ACTIVE");
    if(g_state==STATE_COMPLETE) return("COMPLETE");
    if(g_state==STATE_EXPIRED)  return("EXPIRED");
+   if(g_state==STATE_CANCELLED) return("CANCELLED");
    if(g_state==STATE_ERROR)    return("ERROR");
 
    datetime nowGMT=TimeGMT();
@@ -1181,6 +1207,7 @@ color StateColor()
    if(g_state==STATE_ACTIVE) return(BuyColor);
    if(g_state==STATE_COMPLETE) return(clrLimeGreen);
    if(g_state==STATE_EXPIRED) return(WarningColor);
+   if(g_state==STATE_CANCELLED) return(WarningColor);
    if(g_state==STATE_ERROR) return(clrRed);
    return(PanelText);
 }
@@ -1344,8 +1371,10 @@ void SaveOverrides()
    GlobalVariableSet(OvrName("LOT"),g_workLot);
    GlobalVariableSet(OvrName("BDIST"),g_workBuyDist);
    GlobalVariableSet(OvrName("SDIST"),g_workSellDist);
-   GlobalVariableSet(OvrName("TP"),g_workTP);
-   GlobalVariableSet(OvrName("SL"),g_workSL);
+   GlobalVariableSet(OvrName("BTP"),g_workBuyTP);
+   GlobalVariableSet(OvrName("STP"),g_workSellTP);
+   GlobalVariableSet(OvrName("BSL"),g_workBuySL);
+   GlobalVariableSet(OvrName("SSL"),g_workSellSL);
    GlobalVariableSet(OvrName("TRAIL"),g_workTrail);
    GlobalVariableSet(OvrName("BE"),g_workBE);
    GlobalVariableSet(OvrName("MODE"),(double)g_workMode);
@@ -1360,10 +1389,14 @@ void RestoreOverrides()
       g_workBuyDist=GlobalVariableGet(OvrName("BDIST"));
    if(GlobalVariableCheck(OvrName("SDIST")) && GlobalVariableGet(OvrName("SDIST"))>0)
       g_workSellDist=GlobalVariableGet(OvrName("SDIST"));
-   if(GlobalVariableCheck(OvrName("TP")) && GlobalVariableGet(OvrName("TP"))>0)
-      g_workTP=GlobalVariableGet(OvrName("TP"));
-   if(GlobalVariableCheck(OvrName("SL")) && GlobalVariableGet(OvrName("SL"))>0)
-      g_workSL=GlobalVariableGet(OvrName("SL"));
+   if(GlobalVariableCheck(OvrName("BTP")) && GlobalVariableGet(OvrName("BTP"))>0)
+      g_workBuyTP=GlobalVariableGet(OvrName("BTP"));
+   if(GlobalVariableCheck(OvrName("STP")) && GlobalVariableGet(OvrName("STP"))>0)
+      g_workSellTP=GlobalVariableGet(OvrName("STP"));
+   if(GlobalVariableCheck(OvrName("BSL")) && GlobalVariableGet(OvrName("BSL"))>0)
+      g_workBuySL=GlobalVariableGet(OvrName("BSL"));
+   if(GlobalVariableCheck(OvrName("SSL")) && GlobalVariableGet(OvrName("SSL"))>0)
+      g_workSellSL=GlobalVariableGet(OvrName("SSL"));
    if(GlobalVariableCheck(OvrName("TRAIL")) && GlobalVariableGet(OvrName("TRAIL"))>0)
       g_workTrail=GlobalVariableGet(OvrName("TRAIL"));
    if(GlobalVariableCheck(OvrName("BE")))
@@ -1379,8 +1412,10 @@ void RestoreOverrides()
 
 void ClearOverrides()
 {
-   string tags[9]={"NEWS","LOT","BDIST","SDIST","TP","SL","TRAIL","BE","MODE"};
-   for(int k=0;k<9;k++)
+   // TP/SL are the legacy V7 tag names, cleared for terminals upgrading in place.
+   string tags[13]={"NEWS","LOT","BDIST","SDIST","BTP","STP","BSL","SSL",
+                    "TP","SL","TRAIL","BE","MODE"};
+   for(int k=0;k<13;k++)
       if(GlobalVariableCheck(OvrName(tags[k]))) GlobalVariableDel(OvrName(tags[k]));
 }
 
@@ -1402,9 +1437,9 @@ void UpsertControls()
    MakeLabelCtl(PREFIX+"LB_SD","S.DIST:",PanelRightMargin+448,y2+4);
    MakeEdit(PREFIX+"ED_SD",PanelRightMargin+378,y2,68,22,DoubleToString(g_workSellDist,1));
    MakeLabelCtl(PREFIX+"LB_TP","TP:",PanelRightMargin+346,y2+4);
-   MakeEdit(PREFIX+"ED_TP",PanelRightMargin+276,y2,68,22,DoubleToString(g_workTP,1));
+   MakeEdit(PREFIX+"ED_TP",PanelRightMargin+276,y2,68,22,DoubleToString(g_workBuyTP,1));
    MakeLabelCtl(PREFIX+"LB_SL","SL:",PanelRightMargin+244,y2+4);
-   MakeEdit(PREFIX+"ED_SL",PanelRightMargin+174,y2,68,22,DoubleToString(g_workSL,1));
+   MakeEdit(PREFIX+"ED_SL",PanelRightMargin+174,y2,68,22,DoubleToString(g_workBuySL,1));
    MakeLabelCtl(PREFIX+"LB_TR","TRAIL:",PanelRightMargin+140,y2+4);
    MakeEdit(PREFIX+"ED_TR",PanelRightMargin+72,y2,68,22,DoubleToString(g_workTrail,1));
 
@@ -1420,7 +1455,7 @@ void UpsertControls()
    MakeButton(PREFIX+"BT_CANCEL","CANCEL SETUP",PanelRightMargin+330,y4,132,22,clrChocolate);
    MakeButton(PREFIX+"BT_CLOSE","CLOSE NOW",PanelRightMargin+193,y4,132,22,clrFireBrick);
    MakeLabelCtl(PREFIX+"LB_HINT",
-      "amounts in $  |  BE 0=off  |  MODE cycles  |  CANCEL=pre-trigger  |  CLOSE=post-trigger",
+      "amounts in $  |  TP/SL edits set both sides  |  BE 0=off  |  MODE cycles  |  CANCEL=pre-trigger  |  CLOSE=post-trigger",
       PanelRightMargin+560,y4+4);
 
    ApplyTrailGreying();
@@ -1541,9 +1576,9 @@ void SetControlTexts()
    if(ObjectFind(0,PREFIX+"ED_SD")>=0)
       ObjectSetString(0,PREFIX+"ED_SD",OBJPROP_TEXT,DoubleToString(g_workSellDist,1));
    if(ObjectFind(0,PREFIX+"ED_TP")>=0)
-      ObjectSetString(0,PREFIX+"ED_TP",OBJPROP_TEXT,DoubleToString(g_workTP,1));
+      ObjectSetString(0,PREFIX+"ED_TP",OBJPROP_TEXT,DoubleToString(g_workBuyTP,1));
    if(ObjectFind(0,PREFIX+"ED_SL")>=0)
-      ObjectSetString(0,PREFIX+"ED_SL",OBJPROP_TEXT,DoubleToString(g_workSL,1));
+      ObjectSetString(0,PREFIX+"ED_SL",OBJPROP_TEXT,DoubleToString(g_workBuySL,1));
    if(ObjectFind(0,PREFIX+"ED_TR")>=0)
       ObjectSetString(0,PREFIX+"ED_TR",OBJPROP_TEXT,DoubleToString(g_workTrail,1));
    if(ObjectFind(0,PREFIX+"ED_BE")>=0)
@@ -1558,7 +1593,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    {
       ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
       if(CountActiveEventTrades()<=0)
-      { Notify("XVISION News Straddle V7 | CLOSE ignored - no active trade."); }
+      { Notify("XVISION News Straddle V8 | CLOSE ignored - no active trade."); }
       else
          PanelCloseNow();
       return;
@@ -1567,9 +1602,9 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    {
       ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
       if(CountActiveEventTrades()>0)
-      { Notify("XVISION News Straddle V7 | CANCEL ignored - trade already triggered. Use CLOSE NOW."); }
+      { Notify("XVISION News Straddle V8 | CANCEL ignored - trade already triggered. Use CLOSE NOW."); }
       else if(CountPendingEventOrders()<=0 && g_state!=STATE_WAITING && g_state!=STATE_PENDING)
-      { Notify("XVISION News Straddle V7 | CANCEL ignored - nothing armed."); }
+      { Notify("XVISION News Straddle V8 | CANCEL ignored - nothing armed."); }
       else
          PanelCancelSetup();
       return;
@@ -1578,7 +1613,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    {
       ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
       if(g_state==STATE_PENDING || g_state==STATE_ACTIVE)
-      { Notify("XVISION News Straddle V7 | cannot change mode while orders/trades are live."); }
+      { Notify("XVISION News Straddle V8 | cannot change mode while orders/trades are live."); }
       else
       {
          g_workMode=(g_workMode+1)%3;
@@ -1602,8 +1637,10 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       g_workLot=LotSize;
       g_workBuyDist=BuyStopDistanceMovement;
       g_workSellDist=SellStopDistanceMovement;
-      g_workTP=(BuyTakeProfitMovement+SellTakeProfitMovement)/2.0;
-      g_workSL=(BuyStopLossMovement+SellStopLossMovement)/2.0;
+      g_workBuyTP=BuyTakeProfitMovement;
+      g_workSellTP=SellTakeProfitMovement;
+      g_workBuySL=BuyStopLossMovement;
+      g_workSellSL=SellStopLossMovement;
       g_workTrail=TrailingStopDistanceMovement;
    g_workBE=(MoveToBreakEvenFirst?BreakEvenActivationMovement:0.0);
    g_workMode=(int)ExitMode;
@@ -1612,7 +1649,7 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
       SynchroniseState();
       SetControlTexts();
       g_lastAction="PANEL RESET TO INPUTS";
-      Notify("XVISION News Straddle V7 | panel RESET | news "+
+      Notify("XVISION News Straddle V8 | panel RESET | news "+
              TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES)+" | lot "+
              DoubleToString(g_workLot,2));
       UpdatePanel();
@@ -1628,7 +1665,7 @@ void ApplyFromPanel()
    if(dt<=0)
    {
       g_lastAction="PANEL: BAD TIME FORMAT";
-      Notify("XVISION News Straddle V7 | invalid time. Use YYYY.MM.DD HH:MI (GMT).");
+      Notify("XVISION News Straddle V8 | invalid time. Use YYYY.MM.DD HH:MI (GMT).");
       SetControlTexts();
       return;
    }
@@ -1636,7 +1673,7 @@ void ApplyFromPanel()
    if(lot<=0.0)
    {
       g_lastAction="PANEL: BAD LOT";
-      Notify("XVISION News Straddle V7 | invalid lot size.");
+      Notify("XVISION News Straddle V8 | invalid lot size.");
       SetControlTexts();
       return;
    }
@@ -1651,43 +1688,45 @@ void ApplyFromPanel()
    if(bd<=0.0 || sd<=0.0 || sl<=0.0)
    {
       g_lastAction="PANEL: BAD PARAMETER";
-      Notify("XVISION News Straddle V7 | B.DIST, S.DIST and SL must be positive.");
+      Notify("XVISION News Straddle V8 | B.DIST, S.DIST and SL must be positive.");
       SetControlTexts(); return;
    }
    if(tpOn && tp<=0.0)
    {
       g_lastAction="PANEL: BAD TP";
-      Notify("XVISION News Straddle V7 | TP must be positive in a fixed-TP mode.");
+      Notify("XVISION News Straddle V8 | TP must be positive in a fixed-TP mode.");
       SetControlTexts(); return;
    }
    if(trailOn && tl<=0.0)
    {
       g_lastAction="PANEL: BAD TRAIL";
-      Notify("XVISION News Straddle V7 | TRAIL must be positive when a trailing mode is selected.");
+      Notify("XVISION News Straddle V8 | TRAIL must be positive when a trailing mode is selected.");
       SetControlTexts(); return;
    }
    if(be<0.0)
    {
       g_lastAction="PANEL: BAD BREAK-EVEN";
-      Notify("XVISION News Straddle V7 | BREAK-EVEN cannot be negative (use 0 to disable).");
+      Notify("XVISION News Straddle V8 | BREAK-EVEN cannot be negative (use 0 to disable).");
       SetControlTexts(); return;
    }
    if(g_state==STATE_PENDING || g_state==STATE_ACTIVE)
    {
       g_lastAction="PANEL: BLOCKED - ORDERS LIVE";
-      Notify("XVISION News Straddle V7 | cannot re-schedule while orders/trades are live. Manage or expire them first.");
+      Notify("XVISION News Straddle V8 | cannot re-schedule while orders/trades are live. Manage or expire them first.");
       return;
    }
 
    g_workLot=lot;
    g_workBuyDist=bd; g_workSellDist=sd;
-   g_workTP=tp; g_workSL=sl; g_workTrail=tl; g_workBE=be;
+   g_workBuyTP=tp; g_workSellTP=tp;
+   g_workBuySL=sl; g_workSellSL=sl;
+   g_workTrail=tl; g_workBE=be;
    ApplySchedule(dt);
    SaveOverrides();
    SetControlTexts();
    g_lastAction="PANEL APPLIED";
    string warn=(dt<=TimeGMT())?"  (WARNING: time is in the past!)":"";
-   Notify("XVISION News Straddle V7 | APPLIED | news "+
+   Notify("XVISION News Straddle V8 | APPLIED | news "+
           TimeToString(dt,TIME_DATE|TIME_MINUTES)+" GMT | lot "+
           DoubleToString(lot,2)+
           " | dist B/S "+DoubleToString(bd,1)+"/"+DoubleToString(sd,1)+
@@ -1738,7 +1777,7 @@ void PanelCloseNow()
    }
    SetState(STATE_COMPLETE);
    g_lastAction="MANUAL CLOSE (panel)";
-   Notify("XVISION News Straddle V7 | CLOSED BY PANEL | "+EventName+
+   Notify("XVISION News Straddle V8 | CLOSED BY PANEL | "+EventName+
           " | positions closed: "+IntegerToString(closed));
    UpdatePanel(); UpdateActionButtons();
 }
@@ -1756,9 +1795,11 @@ void PanelCancelSetup()
       if(OrderType()==OP_BUYSTOP || OrderType()==OP_SELLSTOP)
          if(OrderDelete(OrderTicket(),WarningColor)) deleted++;
    }
-   SetState(STATE_EXPIRED);   // terminal: CanPlaceNow() will not re-arm
+   // CANCELLED (not EXPIRED): survives the stale-state cleaner, so a cancel
+   // issued before the placement window opens can never silently re-arm.
+   SetState(STATE_CANCELLED);
    g_lastAction="SETUP CANCELLED (panel)";
-   Notify("XVISION News Straddle V7 | SETUP CANCELLED | "+EventName+
+   Notify("XVISION News Straddle V8 | SETUP CANCELLED | "+EventName+
           " | pendings deleted: "+IntegerToString(deleted)+
           " | will not re-arm for this event (use RESET to re-enable).");
    UpdatePanel(); UpdateActionButtons();
