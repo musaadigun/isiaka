@@ -1,75 +1,83 @@
 #property strict
-#property version   "8.00"
-#property description "XVISION Gold News Straddle V8 - panel-driven straddle with CLOSE/CANCEL, mode selector, diagnostics"
+#property version   "9.00"
+#property description "XVISION Gold News Straddle V9 - F7-configured straddle with a read-only status panel"
 
 // ============================================================================
-// XVISION GOLD NEWS-STRADDLE EA VERSION 8
+// XVISION GOLD NEWS-STRADDLE EA VERSION 9
 //
-// V8 FIXES
-// - Panel LOT override is now actually used when sending orders (V7 sent
-//   the LotSize input regardless of the panel value).
-// - CANCEL SETUP now sets a dedicated CANCELLED state that the stale-state
-//   cleaner respects, so a pre-window cancel no longer silently re-arms.
-// - Buy/Sell TP and SL inputs are honoured per side (V7 averaged them).
-// - NewsDateTimeGMT parsing is genuinely strict: malformed input is
-//   rejected instead of resolving to an unintended datetime.
-// - Arming is blocked with a visible reason when autotrading is disabled.
+// V9 REDESIGN
+// - All configuration lives in the native F7 "Inputs" tab. The primary
+//   trade-setup fields are declared first so they head that list.
+// - NewsDateTimeGMT is a native datetime input: F7 shows a calendar/clock
+//   picker, so the old dotted-string format can no longer be mistyped.
+// - Every input is range-validated at init; a bad value aborts the load
+//   with a specific reason printed to the Experts log.
+// - The on-chart panel is now read-only status only - no edit boxes, no
+//   MODE/APPLY/RESET. The two live-action buttons (CLOSE NOW, CANCEL
+//   SETUP) remain, because F7 cannot close a trade or cancel pendings.
+// - The panel was rebuilt: sectioned, spaced, colour-accented, readable.
+//
+// V8 CARRIED FORWARD: per-side TP/SL, dedicated CANCELLED state, the panel
+// lot actually being used, and the autotrading-disabled block reason.
 //
 // TIME STANDARD
-// NewsDateTimeGMT is entered strictly in GMT/UTC as YYYY.MM.DD HH:MI.
-// All scheduling decisions use TimeGMT(). Broker time is display-only.
+// NewsDateTimeGMT is picked in F7 and treated as GMT/UTC. All scheduling
+// decisions use TimeGMT(); broker time is display-only.
 //
 // PRICE STANDARD
 // Pending distances, TP and SL are raw Gold price movements, not MT4 points.
 // Example: 8.0 means an $8 movement in the Gold quotation.
 // ============================================================================
 
-// --------------------------- Event schedule ---------------------------------
+// The exit-mode enum must be declared before the ExitMode input uses it.
+enum TradeExitMode
+{
+   EXIT_FIXED_TP              = 0,   // Fixed TP + SL
+   EXIT_TRAILING_ONLY         = 1,   // Trailing stop only
+   EXIT_FIXED_TP_AND_TRAILING = 2    // Fixed TP + trailing
+};
+
+// ============================================================================
+//  PRIMARY TRADE SETUP  (this group heads the F7 "Inputs" tab)
+// ============================================================================
+input datetime      NewsDateTimeGMT             = D'2099.01.01 00:00'; // News time (GMT) - pick with the date/time widget
+input double        LotSize                     = 0.01;   // Order volume in lots
+input TradeExitMode ExitMode                    = EXIT_TRAILING_ONLY;  // How triggered trades are managed
+input double        BuyStopDistanceMovement     = 8.0;    // Buy-stop distance above Ask ($)
+input double        SellStopDistanceMovement    = 8.0;    // Sell-stop distance below Bid ($)
+input double        BuyTakeProfitMovement        = 40.0;  // Buy TP ($, fixed-TP modes only)
+input double        BuyStopLossMovement          = 20.0;  // Buy SL ($)
+input double        SellTakeProfitMovement       = 40.0;  // Sell TP ($, fixed-TP modes only)
+input double        SellStopLossMovement         = 20.0;  // Sell SL ($)
+input double        TrailingActivationMovement   = 20.0;  // Profit before trailing starts ($)
+input double        TrailingStopDistanceMovement = 10.0;  // Trailing stop distance ($)
+input double        TrailingStepMovement         = 2.0;   // Minimum trailing step ($)
+input bool          MoveToBreakEvenFirst         = true;  // Lock break-even before trailing
+input double        BreakEvenActivationMovement  = 12.0;  // Profit before break-even ($)
+input double        BreakEvenLockMovement        = 1.0;   // Locked profit at break-even ($)
+
+// ============================================================================
+//  EVENT SCHEDULE
+// ============================================================================
 input string EventName                         = "US CPI";
-input string NewsDateTimeGMT                   = "2099.01.01 00:00";
 input int    PlaceMinutesBeforeNews            = 5;
 input int    PlaceAdditionalSecondsBeforeNews  = 0;
 input int    CancelMinutesAfterNews            = 10;
 input int    CancelAdditionalSecondsAfterNews  = 0;
 
-enum TradeExitMode
-{
-   EXIT_FIXED_TP              = 0,
-   EXIT_TRAILING_ONLY         = 1,
-   EXIT_FIXED_TP_AND_TRAILING = 2
-};
-
-// --------------------------- Order controls ---------------------------------
-input double LotSize                           = 0.01;
+// ============================================================================
+//  EXECUTION
+// ============================================================================
 input bool   EnableBuyStop                     = true;
 input bool   EnableSellStop                    = true;
 input bool   RequireBothPendingOrders          = true;
-
-input double BuyStopDistanceMovement           = 8.0;
-input double SellStopDistanceMovement          = 8.0;
-
-input TradeExitMode ExitMode                   = EXIT_TRAILING_ONLY;
-
-input double BuyTakeProfitMovement             = 40.0;
-input double BuyStopLossMovement               = 20.0;
-input double SellTakeProfitMovement            = 40.0;
-input double SellStopLossMovement              = 20.0;
-
-// Trailing values are raw Gold-price movements.
-input double TrailingActivationMovement        = 20.0;
-input double TrailingStopDistanceMovement      = 10.0;
-input double TrailingStepMovement              = 2.0;
-
-// Optional break-even stage before the trailing stop becomes active.
-input bool   MoveToBreakEvenFirst               = true;
-input double BreakEvenActivationMovement       = 12.0;
-input double BreakEvenLockMovement             = 1.0;
-
 input double MaximumSpreadMovement             = 2.0;   // 0 disables filter
 input int    SlippagePoints                    = 50;
 input int    MagicNumber                       = 26071451;
 
-// --------------------------- Safety controls --------------------------------
+// ============================================================================
+//  SAFETY
+// ============================================================================
 input bool   EnforceGoldSymbol                 = true;
 input bool   CancelOppositePendingOnTrigger    = true;
 input bool   CloseSecondTriggeredTrade         = true;
@@ -78,23 +86,28 @@ input bool   DeletePendingOrdersAtExpiry       = true;
 input bool   AllowPlacementAfterScheduledTime  = false;
 input int    MaximumLatePlacementSeconds       = 0;
 
-// --------------------------- Notifications ----------------------------------
-input bool   ForceResetEventState              = false; // wipe stored state for this event at init
+// ============================================================================
+//  NOTIFICATIONS / MAINTENANCE
+// ============================================================================
+input bool   ForceResetEventState              = false; // wipe stored state at init (re-enables a cancelled event)
 input bool   EnablePopupAlerts                 = true;
 input bool   EnablePushNotifications           = false;
 
-// --------------------------- Panel controls ---------------------------------
+// ============================================================================
+//  STATUS PANEL (display only)
+// ============================================================================
 input bool   ShowGMTPanel                      = true;
-input int    PanelRightMargin                  = 10;
-input int    PanelTopMargin                    = 8;
-input int    PanelWidth                        = 600;
-input int    PanelHeight                       = 151;
+input int    PanelRightMargin                  = 12;
+input int    PanelTopMargin                    = 12;
+input int    PanelWidth                        = 340;
 input int    PanelFontSize                     = 9;
-input color  PanelBackground                   = clrBlack;
-input color  PanelBorder                       = clrDimGray;
-input color  GMTHeaderBackground               = clrMidnightBlue;
-input color  GMTHeaderText                     = clrYellow;
-input color  PanelText                         = clrWhite;
+input color  PanelBackground                   = C'18,20,26';
+input color  PanelBorder                       = C'55,60,72';
+input color  GMTHeaderBackground               = C'20,28,52';
+input color  GMTHeaderText                     = clrGold;
+input color  PanelText                         = clrGainsboro;
+input color  PanelMutedText                    = C'130,136,150';
+input color  PanelAccent                       = C'90,170,255';
 input color  BuyColor                          = clrAqua;
 input color  SellColor                         = clrMagenta;
 input color  WarningColor                      = clrOrange;
@@ -107,7 +120,7 @@ input color  WarningColor                      = clrOrange;
 #define STATE_ERROR     5
 #define STATE_CANCELLED 6
 
-string   PREFIX="XV_GOLD_NS_EA_V8_";
+string   PREFIX="XV_GOLD_NS_EA_V9_";
 datetime g_newsGMT=0;
 datetime g_placeGMT=0;
 datetime g_expiryGMT=0;
@@ -128,6 +141,7 @@ string   g_blockReason="";
 string   g_notifiedReason="";
 bool     g_missedNotified=false;
 bool     g_heartbeatSent=false;
+int      g_panelHeight=0;       // computed each redraw; used to place the buttons
 
 int OnInit()
 {
@@ -145,20 +159,15 @@ int OnInit()
    if(!ValidateInputs())
       return(INIT_PARAMETERS_INCORRECT);
 
-   g_newsGMT=ParseStrictGMT(NewsDateTimeGMT);
-   if(g_newsGMT<=0)
-   {
-      Print("XVISION News-Straddle: invalid NewsDateTimeGMT. Use YYYY.MM.DD HH:MI.");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-
-   ApplySchedule(g_newsGMT);
-   RestoreOverrides();
+   // NewsDateTimeGMT is now a native datetime input, so there is no string
+   // to parse or mis-format; the F7 picker guarantees a valid value.
+   ApplySchedule(NewsDateTimeGMT);
 
    if(ForceResetEventState && GlobalVariableCheck(g_globalStateName))
    {
       GlobalVariableDel(g_globalStateName);
-      Print("XVISION News Straddle V8: stored event state force-cleared.");
+      g_state=STATE_WAITING;
+      Print("XVISION News Straddle V9: stored event state force-cleared.");
    }
 
    SynchroniseState();
@@ -166,7 +175,6 @@ int OnInit()
    RunEngine();
    UpdatePanel();
    UpsertControls();
-   SetControlTexts();
    return(INIT_SUCCEEDED);
 }
 
@@ -193,94 +201,89 @@ void OnTimer()
    UpdateActionButtons();
 }
 
+// Every input is checked here at init. Because the F7 dialog already enforces
+// each field's TYPE (a double field cannot hold letters, the datetime field is
+// a picker), this routine only has to reject out-of-RANGE and contradictory
+// combinations. Any failure aborts the load with a specific reason logged.
 bool ValidateInputs()
 {
+   if(NewsDateTimeGMT<=0)
+   { Print("Validation: NewsDateTimeGMT is not set - pick a date/time in the F7 Inputs tab."); return(false); }
+
    if(LotSize<=0.0)
-   {
-      Print("LotSize must be greater than zero.");
-      return(false);
-   }
+   { Print("Validation: LotSize must be greater than zero."); return(false); }
+
+   double minLot=MarketInfo(Symbol(),MODE_MINLOT);
+   double maxLot=MarketInfo(Symbol(),MODE_MAXLOT);
+   if(minLot>0.0 && LotSize<minLot)
+   { Print("Validation: LotSize ",LotSize," is below the broker minimum ",minLot,"."); return(false); }
+   if(maxLot>0.0 && LotSize>maxLot)
+   { Print("Validation: LotSize ",LotSize," is above the broker maximum ",maxLot,"."); return(false); }
 
    if(!EnableBuyStop && !EnableSellStop)
-   {
-      Print("At least one pending-order side must be enabled.");
-      return(false);
-   }
+   { Print("Validation: at least one pending-order side must be enabled."); return(false); }
 
    if(RequireBothPendingOrders && (!EnableBuyStop || !EnableSellStop))
+   { Print("Validation: RequireBothPendingOrders needs both sides enabled."); return(false); }
+
+   bool fixedTPRequired=(ExitMode==EXIT_FIXED_TP || ExitMode==EXIT_FIXED_TP_AND_TRAILING);
+   bool trailingRequired=(ExitMode==EXIT_TRAILING_ONLY || ExitMode==EXIT_FIXED_TP_AND_TRAILING);
+
+   if(EnableBuyStop)
    {
-      Print("RequireBothPendingOrders requires both sides to be enabled.");
-      return(false);
+      if(BuyStopDistanceMovement<=0.0)
+      { Print("Validation: BuyStopDistanceMovement must be greater than zero."); return(false); }
+      if(BuyStopLossMovement<=0.0)
+      { Print("Validation: BuyStopLossMovement must be greater than zero."); return(false); }
+      if(fixedTPRequired && BuyTakeProfitMovement<=0.0)
+      { Print("Validation: BuyTakeProfitMovement must be positive in a fixed-TP mode."); return(false); }
    }
 
-   bool fixedTPRequired=(ExitMode==EXIT_FIXED_TP ||
-                         ExitMode==EXIT_FIXED_TP_AND_TRAILING);
-   bool trailingRequired=(ExitMode==EXIT_TRAILING_ONLY ||
-                          ExitMode==EXIT_FIXED_TP_AND_TRAILING);
-
-   if(EnableBuyStop &&
-      (g_workBuyDist<=0.0 || g_workBuySL<=0.0 ||
-       (fixedTPRequired && g_workBuyTP<=0.0)))
+   if(EnableSellStop)
    {
-      Print("BUY distance and SL must be greater than zero. BUY TP must also be positive when fixed TP is enabled.");
-      return(false);
-   }
-
-   if(EnableSellStop &&
-      (g_workSellDist<=0.0 || g_workSellSL<=0.0 ||
-       (fixedTPRequired && g_workSellTP<=0.0)))
-   {
-      Print("SELL distance and SL must be greater than zero. SELL TP must also be positive when fixed TP is enabled.");
-      return(false);
+      if(SellStopDistanceMovement<=0.0)
+      { Print("Validation: SellStopDistanceMovement must be greater than zero."); return(false); }
+      if(SellStopLossMovement<=0.0)
+      { Print("Validation: SellStopLossMovement must be greater than zero."); return(false); }
+      if(fixedTPRequired && SellTakeProfitMovement<=0.0)
+      { Print("Validation: SellTakeProfitMovement must be positive in a fixed-TP mode."); return(false); }
    }
 
    if(trailingRequired &&
-      (TrailingActivationMovement<=0.0 ||
-       g_workTrail<=0.0 ||
-       TrailingStepMovement<=0.0))
-   {
-      Print("Trailing activation, distance and step must all be greater than zero.");
-      return(false);
-   }
+      (TrailingActivationMovement<=0.0 || TrailingStopDistanceMovement<=0.0 || TrailingStepMovement<=0.0))
+   { Print("Validation: trailing activation, distance and step must all be greater than zero."); return(false); }
 
    if(MoveToBreakEvenFirst &&
       (BreakEvenActivationMovement<=0.0 || BreakEvenLockMovement<0.0))
-   {
-      Print("Break-even activation must be positive and lock movement cannot be negative.");
-      return(false);
-   }
+   { Print("Validation: break-even activation must be positive and lock cannot be negative."); return(false); }
 
    if(PlaceMinutesBeforeNews<0 || PlaceAdditionalSecondsBeforeNews<0 ||
       CancelMinutesAfterNews<0 || CancelAdditionalSecondsAfterNews<0 ||
       MaximumLatePlacementSeconds<0)
-   {
-      Print("Schedule offsets cannot be negative.");
-      return(false);
-   }
+   { Print("Validation: schedule offsets cannot be negative."); return(false); }
+
+   if(PlaceMinutesBeforeNews*60+PlaceAdditionalSecondsBeforeNews<=0)
+   { Print("Validation: placement lead time (minutes/seconds before news) must be greater than zero."); return(false); }
+
+   if(CancelMinutesAfterNews*60+CancelAdditionalSecondsAfterNews<=0)
+   { Print("Validation: cancel window (minutes/seconds after news) must be greater than zero."); return(false); }
+
+   if(MaximumSpreadMovement<0.0)
+   { Print("Validation: MaximumSpreadMovement cannot be negative (use 0 to disable the filter)."); return(false); }
+
+   if(SlippagePoints<0)
+   { Print("Validation: SlippagePoints cannot be negative."); return(false); }
+
+   if(MagicNumber<=0)
+   { Print("Validation: MagicNumber must be a positive number."); return(false); }
+
+   if(PanelWidth<220)
+   { Print("Validation: PanelWidth must be at least 220."); return(false); }
+
+   if(PanelFontSize<6)
+   { Print("Validation: PanelFontSize must be at least 6."); return(false); }
 
    return(true);
-}
-
-// Accepts only a complete "YYYY.MM.DD HH:MI" ('-' and 'T' separators are
-// tolerated). StringToTime() alone is lenient - an empty or mangled string
-// resolves to a plausible datetime for today - so the parsed value is
-// round-tripped through TimeToString() and must reproduce the input.
-datetime ParseStrictGMT(string value)
-{
-   string cleaned=value;
-   StringTrimLeft(cleaned);
-   StringTrimRight(cleaned);
-   StringReplace(cleaned,"-",".");
-   StringReplace(cleaned,"T"," ");
-
-   datetime parsed=StringToTime(cleaned);
-   if(parsed<=0)
-      return(0);
-
-   if(TimeToString(parsed,TIME_DATE|TIME_MINUTES)!=cleaned)
-      return(0);
-
-   return(parsed);
 }
 
 void RunEngine()
@@ -313,7 +316,7 @@ void RunEngine()
       nowGMT>=g_placeGMT-60 && nowGMT<g_placeGMT)
    {
       g_heartbeatSent=true;
-      Notify("XVISION News Straddle V8 alive | arming in <=60s | "+EventName+
+      Notify("XVISION News Straddle V9 alive | arming in <=60s | "+EventName+
              " | spread "+DoubleToString(Ask-Bid,Digits));
    }
 
@@ -328,14 +331,14 @@ void RunEngine()
       nowGMT>=g_placeGMT && nowGMT<g_expiryGMT && g_state==STATE_WAITING)
    {
       g_notifiedReason=g_blockReason;
-      Notify("XVISION News Straddle V8 ARM BLOCKED | "+EventName+" | "+g_blockReason);
+      Notify("XVISION News Straddle V9 ARM BLOCKED | "+EventName+" | "+g_blockReason);
    }
 
    // V3: loud alarm if the news moment arrives with nothing armed
    if(!g_missedNotified && g_state==STATE_WAITING && nowGMT>=g_newsGMT)
    {
       g_missedNotified=true;
-      Notify("XVISION News Straddle V8 WINDOW MISSED | "+EventName+
+      Notify("XVISION News Straddle V9 WINDOW MISSED | "+EventName+
              " | last block: "+(g_blockReason==""?"none recorded":g_blockReason));
    }
 
@@ -468,7 +471,7 @@ bool PlaceNewsStraddle()
    SetState(STATE_PENDING);
    g_lastAction="STRADDLE ARMED";
 
-   Notify("XVISION News Straddle V8 armed | "+EventName+
+   Notify("XVISION News Straddle V9 armed | "+EventName+
           " | News GMT "+TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES)+
           " | Buy ticket "+IntegerToString(buyTicket)+
           " | Sell ticket "+IntegerToString(sellTicket));
@@ -582,7 +585,7 @@ void ManageTriggeredTrades()
       string side=(survivorType==OP_BUY)?"BUY":"SELL";
       g_lastAction=side+" TRIGGERED";
 
-      Notify("XVISION News Straddle V8 "+side+" triggered | Ticket "+
+      Notify("XVISION News Straddle V9 "+side+" triggered | Ticket "+
              IntegerToString(survivorTicket)+" | Fill "+
              DoubleToString(OrderOpenPrice(),Digits));
    }
@@ -931,7 +934,7 @@ void ExpirePendingOrders()
       if(deleted>0)
       {
          g_lastAction="UNTRIGGERED ORDERS EXPIRED";
-         Notify("XVISION News Straddle V8 expired without a trigger | "+EventName);
+         Notify("XVISION News Straddle V9 expired without a trigger | "+EventName);
       }
    }
 }
@@ -1109,57 +1112,66 @@ void UpdatePanel()
 
    double buyPrice=FindOpenOrderPrice(OP_BUYSTOP);
    double sellPrice=FindOpenOrderPrice(OP_SELLSTOP);
+   string buyText =(buyPrice>0.0) ?DoubleToString(buyPrice,Digits) :"--";
+   string sellText=(sellPrice>0.0)?DoubleToString(sellPrice,Digits):"--";
 
-   string buyText=(buyPrice>0.0)?DoubleToString(buyPrice,Digits):"not placed";
-   string sellText=(sellPrice>0.0)?DoubleToString(sellPrice,Digits):"not placed";
+   int rowH  = PanelFontSize+11;    // body line pitch
+   int secH  = PanelFontSize+15;    // section-header pitch
+   int headH = PanelFontSize+20;    // title band height
 
-   UpsertHeaderBackground();
-   UpsertPanelBackground();
+   // Backgrounds are created first so every label renders on top of them.
+   // The outer box is sized to a rough height now and trimmed to the exact
+   // height at the end, once the row cursor has run to the bottom.
+   PanelRect(PREFIX+"PANEL_BG",PanelTopMargin,600,PanelBackground);
+   PanelRect(PREFIX+"HEADER_BG",PanelTopMargin,headH,GMTHeaderBackground);
+   DrawLabel(PREFIX+"TITLE",PanelTopMargin+4,PanelFontSize+1,
+             "XVISION  -  GOLD NEWS STRADDLE",GMTHeaderText,false,true);
 
-   UpsertPanelLabel(PREFIX+"GMT",
-      "GMT NOW: "+TimeToString(nowGMT,TIME_DATE|TIME_SECONDS),
-      GMTHeaderText,4,true);
+   int y=PanelTopMargin+headH+8;
 
-   UpsertPanelLabel(PREFIX+"L1",
-      "EVENT: "+EventName+"  |  NEWS GMT: "+
-      TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES),
-      PanelText,32,false);
+   // Primary status: STATE and COUNTDOWN, both in a larger font.
+   DrawLabel(PREFIX+"CAP_ST",y,PanelFontSize,"STATUS",PanelMutedText,false,false);
+   DrawLabel(PREFIX+"VAL_ST",y-1,PanelFontSize+3,StateText(),StateColor(),true,true);
+   y+=rowH+6;
+   DrawLabel(PREFIX+"CAP_CD",y,PanelFontSize,"COUNTDOWN",PanelMutedText,false,false);
+   DrawLabel(PREFIX+"VAL_CD",y-1,PanelFontSize+2,CountdownText(nowGMT),PanelAccent,true,true);
+   y+=rowH+6;
 
-   UpsertPanelLabel(PREFIX+"L2",
-      "PLACE GMT: "+TimeToString(g_placeGMT,TIME_DATE|TIME_SECONDS)+
-      "  |  EXPIRE GMT: "+TimeToString(g_expiryGMT,TIME_DATE|TIME_SECONDS),
-      PanelText,49,false);
+   PanelSection(PREFIX+"S_EVT",y,"EVENT");  y+=secH;
+   PanelRow(PREFIX+"EVT",  y,"Event",        EventName,                                        PanelText); y+=rowH;
+   PanelRow(PREFIX+"NEWS", y,"News (GMT)",   TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES),   PanelText); y+=rowH;
+   PanelRow(PREFIX+"PLC",  y,"Place (GMT)",  TimeToString(g_placeGMT,TIME_DATE|TIME_MINUTES),  PanelText); y+=rowH;
+   PanelRow(PREFIX+"EXP",  y,"Expire (GMT)", TimeToString(g_expiryGMT,TIME_DATE|TIME_MINUTES), PanelText); y+=rowH;
 
-   UpsertPanelLabel(PREFIX+"L3",
-      "STATE: "+StateText()+"  |  COUNTDOWN: "+CountdownText(nowGMT)+
-      "  |  LAST: "+g_lastAction+"  |  DIAG: "+(g_blockReason==""?"-":g_blockReason),
-      StateColor(),66,false);
+   PanelSection(PREFIX+"S_ORD",y,"ORDERS");  y+=secH;
+   PanelRow(PREFIX+"BUY",  y,"Buy stop",  buyText,  BuyColor);  y+=rowH;
+   PanelRow(PREFIX+"SELL", y,"Sell stop", sellText, SellColor); y+=rowH;
+   double spread=Ask-Bid;
+   bool spreadHigh=(MaximumSpreadMovement>0.0 && spread>MaximumSpreadMovement);
+   PanelRow(PREFIX+"SPR",  y,"Spread",
+            DoubleToString(spread,Digits)+(spreadHigh?"  HIGH":""),
+            spreadHigh?WarningColor:PanelText); y+=rowH;
 
-   UpsertPanelLabel(PREFIX+"L4",
-      "BUY STOP: "+buyText+"  |  SELL STOP: "+sellText+
-      "  |  SPREAD: "+DoubleToString(Ask-Bid,Digits),
-      PanelText,83,false);
+   PanelSection(PREFIX+"S_PLN",y,"PLAN");    y+=secH;
+   PanelRow(PREFIX+"LOT",  y,"Lot",        DoubleToString(NormalizeLots(g_workLot),LotDigits()), PanelText); y+=rowH;
+   PanelRow(PREFIX+"MODE", y,"Exit mode",  ModeText(g_workMode),                                 PanelText); y+=rowH;
+   PanelRow(PREFIX+"SL",   y,"SL  buy/sell", DoubleToString(g_workBuySL,1)+" / "+DoubleToString(g_workSellSL,1), PanelText); y+=rowH;
+   PanelRow(PREFIX+"TP",   y,"TP  buy/sell", DoubleToString(g_workBuyTP,1)+" / "+DoubleToString(g_workSellTP,1), PanelText); y+=rowH;
+   PanelRow(PREFIX+"TRL",  y,"Trail a/d/s",  DoubleToString(TrailingActivationMovement,1)+" / "+
+            DoubleToString(g_workTrail,1)+" / "+DoubleToString(TrailingStepMovement,1),          PanelText); y+=rowH;
+   PanelRow(PREFIX+"BE",   y,"Break-even",   BreakEvenText(),                                    PanelText); y+=rowH;
 
-   UpsertPanelLabel(PREFIX+"L5",
-      "LOT: "+DoubleToString(NormalizeLots(g_workLot),LotDigits())+
-      "  |  EXIT: "+ModeShort(g_workMode)+
-      "  |  SL B/S: "+DoubleToString(g_workBuySL,1)+
-      "/"+DoubleToString(g_workSellSL,1)+
-      "  |  TP B/S: "+DoubleToString(g_workBuyTP,1)+
-      "/"+DoubleToString(g_workSellTP,1),
-      PanelText,100,false);
+   PanelSection(PREFIX+"S_CLK",y,"CLOCK");   y+=secH;
+   PanelRow(PREFIX+"GMT",  y,"GMT now", TimeToString(nowGMT,TIME_DATE|TIME_SECONDS), GMTHeaderText); y+=rowH;
+   PanelRow(PREFIX+"BRK",  y,"Broker",
+            TimeToString(brokerNow,TIME_MINUTES|TIME_SECONDS)+"  ("+OffsetText(brokerOffset)+")",
+            PanelMutedText); y+=rowH;
+   PanelRow(PREFIX+"NOTE", y,"Note",
+            (g_blockReason==""?g_lastAction:g_lastAction+" | "+g_blockReason),
+            PanelMutedText); y+=rowH;
 
-   UpsertPanelLabel(PREFIX+"L6",
-      "TRAIL ACT/DIST/STEP: "+DoubleToString(TrailingActivationMovement,1)+
-      "/"+DoubleToString(g_workTrail,1)+
-      "/"+DoubleToString(TrailingStepMovement,1)+
-      "  |  BE: "+BreakEvenText(),
-      PanelText,117,false);
-
-   UpsertPanelLabel(PREFIX+"L7",
-      "BROKER TIME: "+TimeToString(brokerNow,TIME_DATE|TIME_SECONDS)+
-      "  |  BROKER-GMT OFFSET: "+OffsetText(brokerOffset),
-      PanelText,134,false);
+   g_panelHeight=(y+6)-PanelTopMargin;
+   ObjectSetInteger(0,PREFIX+"PANEL_BG",OBJPROP_YSIZE,g_panelHeight);
 
    ChartRedraw();
 }
@@ -1267,68 +1279,79 @@ string OffsetText(int totalSeconds)
    return(sign+TwoDigits(hours)+":"+TwoDigits(minutes));
 }
 
-void UpsertHeaderBackground()
+// A filled rectangle used for the panel body and the header band.
+void PanelRect(string name,int yTop,int height,color bg)
 {
-   string name=PREFIX+"HEADER_BG";
    if(ObjectFind(0,name)<0) ObjectCreate(0,name,OBJ_RECTANGLE_LABEL,0,0,0);
-
    ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
    ObjectSetInteger(0,name,OBJPROP_XDISTANCE,PanelRightMargin);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,PanelTopMargin);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,yTop);
    ObjectSetInteger(0,name,OBJPROP_XSIZE,PanelWidth);
-   ObjectSetInteger(0,name,OBJPROP_YSIZE,25);
-   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,GMTHeaderBackground);
-   ObjectSetInteger(0,name,OBJPROP_BORDER_COLOR,PanelBorder);
+   ObjectSetInteger(0,name,OBJPROP_YSIZE,height);
+   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,bg);
+   ObjectSetInteger(0,name,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,PanelBorder);
    ObjectSetInteger(0,name,OBJPROP_BACK,false);
    ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
    ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
 }
 
-void UpsertPanelBackground()
-{
-   string name=PREFIX+"PANEL_BG";
-   if(ObjectFind(0,name)<0) ObjectCreate(0,name,OBJ_RECTANGLE_LABEL,0,0,0);
-
-   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,PanelRightMargin);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,PanelTopMargin+25);
-   ObjectSetInteger(0,name,OBJPROP_XSIZE,PanelWidth);
-   ObjectSetInteger(0,name,OBJPROP_YSIZE,PanelHeight-25);
-   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,PanelBackground);
-   ObjectSetInteger(0,name,OBJPROP_BORDER_COLOR,PanelBorder);
-   ObjectSetInteger(0,name,OBJPROP_BACK,false);
-   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
-   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
-}
-
-void UpsertPanelLabel(string name,string text,color textColor,int yOffset,bool bold)
+// One text element. rightAlign=false anchors it to the panel's left inner
+// edge (captions); rightAlign=true anchors it to the right inner edge (values).
+void DrawLabel(string name,int y,int fontSize,string text,color col,bool rightAlign,bool bold)
 {
    if(ObjectFind(0,name)<0) ObjectCreate(0,name,OBJ_LABEL,0,0,0);
-
    ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0,name,OBJPROP_ANCHOR,ANCHOR_RIGHT_UPPER);
-   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,PanelRightMargin+10);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,PanelTopMargin+yOffset);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
-   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,bold?PanelFontSize+2:PanelFontSize);
-   ObjectSetString(0,name,OBJPROP_FONT,bold?"Arial Bold":"Arial");
+   ObjectSetInteger(0,name,OBJPROP_ANCHOR,rightAlign?ANCHOR_RIGHT_UPPER:ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,rightAlign?(PanelRightMargin+14):(PanelRightMargin+PanelWidth-14));
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,col);
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,fontSize);
+   ObjectSetString(0,name,OBJPROP_FONT,bold?"Tahoma Bold":"Tahoma");
    ObjectSetString(0,name,OBJPROP_TEXT,text);
    ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
    ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
 }
 
+// A section header: accent-coloured caption plus a thin divider rule beneath.
+void PanelSection(string name,int y,string title)
+{
+   DrawLabel(name,y,PanelFontSize-1,title,PanelAccent,false,true);
+
+   string dv=name+"_DV";
+   if(ObjectFind(0,dv)<0) ObjectCreate(0,dv,OBJ_RECTANGLE_LABEL,0,0,0);
+   ObjectSetInteger(0,dv,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0,dv,OBJPROP_XDISTANCE,PanelRightMargin+12);
+   ObjectSetInteger(0,dv,OBJPROP_YDISTANCE,y+PanelFontSize+5);
+   ObjectSetInteger(0,dv,OBJPROP_XSIZE,PanelWidth-24);
+   ObjectSetInteger(0,dv,OBJPROP_YSIZE,1);
+   ObjectSetInteger(0,dv,OBJPROP_BGCOLOR,PanelBorder);
+   ObjectSetInteger(0,dv,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+   ObjectSetInteger(0,dv,OBJPROP_COLOR,PanelBorder);
+   ObjectSetInteger(0,dv,OBJPROP_BACK,false);
+   ObjectSetInteger(0,dv,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,dv,OBJPROP_HIDDEN,true);
+}
+
+// A label/value line: muted caption on the left, coloured value on the right.
+void PanelRow(string tag,int y,string caption,string value,color valColor)
+{
+   DrawLabel(tag+"_C",y,PanelFontSize,caption,PanelMutedText,false,false);
+   DrawLabel(tag+"_V",y,PanelFontSize,value,valColor,true,true);
+}
+
+string ModeText(int m)
+{
+   if(m==EXIT_FIXED_TP)      return("Fixed TP + SL");
+   if(m==EXIT_TRAILING_ONLY) return("Trailing only");
+   return("TP + Trailing");
+}
+
 void DeletePanel()
 {
-   DeleteObject(PREFIX+"HEADER_BG");
-   DeleteObject(PREFIX+"PANEL_BG");
-   DeleteObject(PREFIX+"GMT");
-   DeleteObject(PREFIX+"L1");
-   DeleteObject(PREFIX+"L2");
-   DeleteObject(PREFIX+"L3");
-   DeleteObject(PREFIX+"L4");
-   DeleteObject(PREFIX+"L5");
-   DeleteObject(PREFIX+"L6");
-   DeleteObject(PREFIX+"L7");
+   // Every panel object (and the two buttons) shares PREFIX, so hiding the
+   // panel simply clears them all; UpsertControls re-skips while hidden.
+   DeleteObjectsByPrefix();
 }
 
 void DeleteObjectsByPrefix()
@@ -1362,139 +1385,37 @@ void ApplySchedule(datetime newsGMT)
    SynchroniseState();
 }
 
-string OvrName(string tag)
-{ return(PREFIX+"OVR_"+tag+"_"+Symbol()+"_"+IntegerToString(MagicNumber)); }
-
-void SaveOverrides()
-{
-   GlobalVariableSet(OvrName("NEWS"),(double)g_newsGMT);
-   GlobalVariableSet(OvrName("LOT"),g_workLot);
-   GlobalVariableSet(OvrName("BDIST"),g_workBuyDist);
-   GlobalVariableSet(OvrName("SDIST"),g_workSellDist);
-   GlobalVariableSet(OvrName("BTP"),g_workBuyTP);
-   GlobalVariableSet(OvrName("STP"),g_workSellTP);
-   GlobalVariableSet(OvrName("BSL"),g_workBuySL);
-   GlobalVariableSet(OvrName("SSL"),g_workSellSL);
-   GlobalVariableSet(OvrName("TRAIL"),g_workTrail);
-   GlobalVariableSet(OvrName("BE"),g_workBE);
-   GlobalVariableSet(OvrName("MODE"),(double)g_workMode);
-}
-
-void RestoreOverrides()
-{
-   if(GlobalVariableCheck(OvrName("LOT")))
-      g_workLot=NormalizeLots(GlobalVariableGet(OvrName("LOT")));
-   if(g_workLot<=0.0) g_workLot=LotSize;
-   if(GlobalVariableCheck(OvrName("BDIST")) && GlobalVariableGet(OvrName("BDIST"))>0)
-      g_workBuyDist=GlobalVariableGet(OvrName("BDIST"));
-   if(GlobalVariableCheck(OvrName("SDIST")) && GlobalVariableGet(OvrName("SDIST"))>0)
-      g_workSellDist=GlobalVariableGet(OvrName("SDIST"));
-   if(GlobalVariableCheck(OvrName("BTP")) && GlobalVariableGet(OvrName("BTP"))>0)
-      g_workBuyTP=GlobalVariableGet(OvrName("BTP"));
-   if(GlobalVariableCheck(OvrName("STP")) && GlobalVariableGet(OvrName("STP"))>0)
-      g_workSellTP=GlobalVariableGet(OvrName("STP"));
-   if(GlobalVariableCheck(OvrName("BSL")) && GlobalVariableGet(OvrName("BSL"))>0)
-      g_workBuySL=GlobalVariableGet(OvrName("BSL"));
-   if(GlobalVariableCheck(OvrName("SSL")) && GlobalVariableGet(OvrName("SSL"))>0)
-      g_workSellSL=GlobalVariableGet(OvrName("SSL"));
-   if(GlobalVariableCheck(OvrName("TRAIL")) && GlobalVariableGet(OvrName("TRAIL"))>0)
-      g_workTrail=GlobalVariableGet(OvrName("TRAIL"));
-   if(GlobalVariableCheck(OvrName("BE")))
-      g_workBE=GlobalVariableGet(OvrName("BE"));
-   if(GlobalVariableCheck(OvrName("MODE")))
-      g_workMode=(int)GlobalVariableGet(OvrName("MODE"));
-   if(GlobalVariableCheck(OvrName("NEWS")))
-   {
-      datetime dt=(datetime)GlobalVariableGet(OvrName("NEWS"));
-      if(dt>0) ApplySchedule(dt);
-   }
-}
-
-void ClearOverrides()
-{
-   // TP/SL are the legacy V7 tag names, cleared for terminals upgrading in place.
-   string tags[13]={"NEWS","LOT","BDIST","SDIST","BTP","STP","BSL","SSL",
-                    "TP","SL","TRAIL","BE","MODE"};
-   for(int k=0;k<13;k++)
-      if(GlobalVariableCheck(OvrName(tags[k]))) GlobalVariableDel(OvrName(tags[k]));
-}
-
+//+------------------------------------------------------------------+
+//| The two live-action buttons sit directly beneath the status      |
+//| panel. All configuration now lives in the F7 Inputs tab, so the  |
+//| old edit fields, MODE/APPLY/RESET buttons and their global-       |
+//| variable override layer have been removed entirely.              |
+//+------------------------------------------------------------------+
 void UpsertControls()
 {
-   int y1=PanelTopMargin+PanelHeight+8;    // row 1: schedule
-   int y2=y1+26;                            // row 2: distances/TP/SL/trail
-   int y3=y2+26;                            // row 3: mode + break-even
-   int y4=y3+26;                            // row 4: actions
-   MakeLabelCtl(PREFIX+"LB_TIME","NEWS GMT:",PanelRightMargin+520,y1+4);
-   MakeEdit(PREFIX+"ED_TIME",PanelRightMargin+330,y1,180,22,
-            TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES));
-   MakeLabelCtl(PREFIX+"LB_LOT","LOT:",PanelRightMargin+280,y1+4);
-   MakeEdit(PREFIX+"ED_LOT",PanelRightMargin+190,y1,85,22,
-            DoubleToString(g_workLot,2));
-
-   MakeLabelCtl(PREFIX+"LB_BD","B.DIST:",PanelRightMargin+560,y2+4);
-   MakeEdit(PREFIX+"ED_BD",PanelRightMargin+490,y2,68,22,DoubleToString(g_workBuyDist,1));
-   MakeLabelCtl(PREFIX+"LB_SD","S.DIST:",PanelRightMargin+448,y2+4);
-   MakeEdit(PREFIX+"ED_SD",PanelRightMargin+378,y2,68,22,DoubleToString(g_workSellDist,1));
-   MakeLabelCtl(PREFIX+"LB_TP","TP:",PanelRightMargin+346,y2+4);
-   MakeEdit(PREFIX+"ED_TP",PanelRightMargin+276,y2,68,22,DoubleToString(g_workBuyTP,1));
-   MakeLabelCtl(PREFIX+"LB_SL","SL:",PanelRightMargin+244,y2+4);
-   MakeEdit(PREFIX+"ED_SL",PanelRightMargin+174,y2,68,22,DoubleToString(g_workBuySL,1));
-   MakeLabelCtl(PREFIX+"LB_TR","TRAIL:",PanelRightMargin+140,y2+4);
-   MakeEdit(PREFIX+"ED_TR",PanelRightMargin+72,y2,68,22,DoubleToString(g_workTrail,1));
-
-   // row 3: mode selector + break-even
-   MakeLabelCtl(PREFIX+"LB_MODE","MODE:",PanelRightMargin+560,y3+4);
-   MakeButton(PREFIX+"BT_MODE",ModeShort(g_workMode),PanelRightMargin+372,y3,186,22,clrDarkSlateGray);
-   MakeLabelCtl(PREFIX+"LB_BE","BREAK-EVEN:",PanelRightMargin+346,y3+4);
-   MakeEdit(PREFIX+"ED_BE",PanelRightMargin+276,y3,68,22,DoubleToString(g_workBE,1));
-
-   // row 4: actions
-   MakeButton(PREFIX+"BT_APPLY","APPLY",PanelRightMargin+560,y4,88,22,clrSeaGreen);
-   MakeButton(PREFIX+"BT_RESET","RESET",PanelRightMargin+467,y4,88,22,clrDarkSlateGray);
-   MakeButton(PREFIX+"BT_CANCEL","CANCEL SETUP",PanelRightMargin+330,y4,132,22,clrChocolate);
-   MakeButton(PREFIX+"BT_CLOSE","CLOSE NOW",PanelRightMargin+193,y4,132,22,clrFireBrick);
-   MakeLabelCtl(PREFIX+"LB_HINT",
-      "amounts in $  |  TP/SL edits set both sides  |  BE 0=off  |  MODE cycles  |  CANCEL=pre-trigger  |  CLOSE=post-trigger",
-      PanelRightMargin+560,y4+4);
-
-   ApplyTrailGreying();
-}
-
-string ModeShort(int m)
-{
-   if(m==EXIT_FIXED_TP) return("MODE: FIXED TP+SL");
-   if(m==EXIT_TRAILING_ONLY) return("MODE: TRAILING ONLY");
-   return("MODE: TP + TRAILING");
-}
-
-void ApplyTrailGreying()
-{
-   bool trailOn=(g_workMode==EXIT_TRAILING_ONLY || g_workMode==EXIT_FIXED_TP_AND_TRAILING);
-   color edgeCol=trailOn?clrYellow:clrDimGray;
-   color lblCol =trailOn?clrSilver:clrDimGray;
-   if(ObjectFind(0,PREFIX+"ED_TR")>=0)
+   if(!ShowGMTPanel)
    {
-      ObjectSetInteger(0,PREFIX+"ED_TR",OBJPROP_COLOR,edgeCol);
-      ObjectSetInteger(0,PREFIX+"ED_TR",OBJPROP_READONLY,!trailOn);
+      DeleteObject(PREFIX+"BT_CLOSE");
+      DeleteObject(PREFIX+"BT_CANCEL");
+      return;
    }
-   if(ObjectFind(0,PREFIX+"LB_TR")>=0)
-      ObjectSetInteger(0,PREFIX+"LB_TR",OBJPROP_COLOR,lblCol);
-   // TP field greyed when a fixed-TP mode is NOT active
-   bool tpOn=(g_workMode==EXIT_FIXED_TP || g_workMode==EXIT_FIXED_TP_AND_TRAILING);
-   if(ObjectFind(0,PREFIX+"ED_TP")>=0)
-   {
-      ObjectSetInteger(0,PREFIX+"ED_TP",OBJPROP_COLOR,tpOn?clrYellow:clrDimGray);
-      ObjectSetInteger(0,PREFIX+"ED_TP",OBJPROP_READONLY,!tpOn);
-   }
-   if(ObjectFind(0,PREFIX+"LB_TP")>=0)
-      ObjectSetInteger(0,PREFIX+"LB_TP",OBJPROP_COLOR,tpOn?clrSilver:clrDimGray);
+
+   int btnY = PanelTopMargin+g_panelHeight+8;
+   int btnH = PanelFontSize+16;
+   int halfW=(PanelWidth-8)/2;
+
+   // CORNER_RIGHT_UPPER: CLOSE takes the right half, CANCEL the left half.
+   MakeButton(PREFIX+"BT_CLOSE", "CLOSE NOW",    PanelRightMargin,          btnY,halfW,btnH,clrFireBrick);
+   MakeButton(PREFIX+"BT_CANCEL","CANCEL SETUP", PanelRightMargin+halfW+8,  btnY,halfW,btnH,clrChocolate);
+
    UpdateActionButtons();
 }
 
 //+------------------------------------------------------------------+
-//| CLOSE live only when a trade is active; CANCEL live only while a  |
-//| setup is armed/pending and nothing has triggered yet.            |
+//| CLOSE is live only when a trade is active; CANCEL is live only    |
+//| while a setup is armed/waiting and nothing has triggered yet.     |
+//| Inactive buttons are dimmed rather than hidden.                   |
+//+------------------------------------------------------------------+
 void UpdateActionButtons()
 {
    bool tradeLive  = (CountActiveEventTrades()>0);
@@ -1503,31 +1424,14 @@ void UpdateActionButtons()
 
    if(ObjectFind(0,PREFIX+"BT_CLOSE")>=0)
    {
-      ObjectSetInteger(0,PREFIX+"BT_CLOSE",OBJPROP_BGCOLOR, tradeLive?clrFireBrick:clrDimGray);
-      ObjectSetInteger(0,PREFIX+"BT_CLOSE",OBJPROP_COLOR,   tradeLive?clrWhite:clrGray);
+      ObjectSetInteger(0,PREFIX+"BT_CLOSE",OBJPROP_BGCOLOR, tradeLive?clrFireBrick:C'70,45,45');
+      ObjectSetInteger(0,PREFIX+"BT_CLOSE",OBJPROP_COLOR,   tradeLive?clrWhite:C'150,150,150');
    }
    if(ObjectFind(0,PREFIX+"BT_CANCEL")>=0)
    {
-      ObjectSetInteger(0,PREFIX+"BT_CANCEL",OBJPROP_BGCOLOR, setupArmed?clrChocolate:clrDimGray);
-      ObjectSetInteger(0,PREFIX+"BT_CANCEL",OBJPROP_COLOR,   setupArmed?clrWhite:clrGray);
+      ObjectSetInteger(0,PREFIX+"BT_CANCEL",OBJPROP_BGCOLOR, setupArmed?clrChocolate:C'70,60,45');
+      ObjectSetInteger(0,PREFIX+"BT_CANCEL",OBJPROP_COLOR,   setupArmed?clrWhite:C'150,150,150');
    }
-}
-
-void MakeEdit(string name,int x,int y,int w,int hgt,string initial)
-{
-   if(ObjectFind(0,name)>=0) return;      // never clobber user typing
-   ObjectCreate(0,name,OBJ_EDIT,0,0,0);
-   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
-   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
-   ObjectSetInteger(0,name,OBJPROP_XSIZE,w);
-   ObjectSetInteger(0,name,OBJPROP_YSIZE,hgt);
-   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,PanelFontSize);
-   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,clrBlack);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,clrYellow);
-   ObjectSetInteger(0,name,OBJPROP_BORDER_COLOR,clrDimGray);
-   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
-   ObjectSetString(0,name,OBJPROP_TEXT,initial);
 }
 
 void MakeButton(string name,string text,int x,int y,int w,int hgt,color bg)
@@ -1543,48 +1447,17 @@ void MakeButton(string name,string text,int x,int y,int w,int hgt,color bg)
       ObjectSetInteger(0,name,OBJPROP_FONTSIZE,PanelFontSize);
       ObjectSetInteger(0,name,OBJPROP_BGCOLOR,bg);
       ObjectSetInteger(0,name,OBJPROP_COLOR,clrWhite);
+      ObjectSetString(0,name,OBJPROP_FONT,"Tahoma Bold");
       ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
       ObjectSetString(0,name,OBJPROP_TEXT,text);
    }
    ObjectSetInteger(0,name,OBJPROP_STATE,false);
 }
 
-void MakeLabelCtl(string name,string text,int x,int y)
-{
-   if(ObjectFind(0,name)<0)
-   {
-      ObjectCreate(0,name,OBJ_LABEL,0,0,0);
-      ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
-      ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
-      ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
-      ObjectSetInteger(0,name,OBJPROP_FONTSIZE,PanelFontSize);
-      ObjectSetInteger(0,name,OBJPROP_COLOR,clrSilver);
-      ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
-   }
-   ObjectSetString(0,name,OBJPROP_TEXT,text);
-}
-
-void SetControlTexts()
-{
-   if(ObjectFind(0,PREFIX+"ED_TIME")>=0)
-      ObjectSetString(0,PREFIX+"ED_TIME",OBJPROP_TEXT,
-                      TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES));
-   if(ObjectFind(0,PREFIX+"ED_LOT")>=0)
-      ObjectSetString(0,PREFIX+"ED_LOT",OBJPROP_TEXT,DoubleToString(g_workLot,2));
-   if(ObjectFind(0,PREFIX+"ED_BD")>=0)
-      ObjectSetString(0,PREFIX+"ED_BD",OBJPROP_TEXT,DoubleToString(g_workBuyDist,1));
-   if(ObjectFind(0,PREFIX+"ED_SD")>=0)
-      ObjectSetString(0,PREFIX+"ED_SD",OBJPROP_TEXT,DoubleToString(g_workSellDist,1));
-   if(ObjectFind(0,PREFIX+"ED_TP")>=0)
-      ObjectSetString(0,PREFIX+"ED_TP",OBJPROP_TEXT,DoubleToString(g_workBuyTP,1));
-   if(ObjectFind(0,PREFIX+"ED_SL")>=0)
-      ObjectSetString(0,PREFIX+"ED_SL",OBJPROP_TEXT,DoubleToString(g_workBuySL,1));
-   if(ObjectFind(0,PREFIX+"ED_TR")>=0)
-      ObjectSetString(0,PREFIX+"ED_TR",OBJPROP_TEXT,DoubleToString(g_workTrail,1));
-   if(ObjectFind(0,PREFIX+"ED_BE")>=0)
-      ObjectSetString(0,PREFIX+"ED_BE",OBJPROP_TEXT,DoubleToString(g_workBE,1));
-}
-
+//+------------------------------------------------------------------+
+//| Only the two live-action buttons are interactive now. Everything  |
+//| else is configured through the F7 Inputs tab.                     |
+//+------------------------------------------------------------------+
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
 {
    if(id!=CHARTEVENT_OBJECT_CLICK) return;
@@ -1593,147 +1466,23 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
    {
       ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
       if(CountActiveEventTrades()<=0)
-      { Notify("XVISION News Straddle V8 | CLOSE ignored - no active trade."); }
+         Notify("XVISION News Straddle V9 | CLOSE ignored - no active trade.");
       else
          PanelCloseNow();
       return;
    }
+
    if(sparam==PREFIX+"BT_CANCEL")
    {
       ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
       if(CountActiveEventTrades()>0)
-      { Notify("XVISION News Straddle V8 | CANCEL ignored - trade already triggered. Use CLOSE NOW."); }
+         Notify("XVISION News Straddle V9 | CANCEL ignored - trade already triggered. Use CLOSE NOW.");
       else if(CountPendingEventOrders()<=0 && g_state!=STATE_WAITING && g_state!=STATE_PENDING)
-      { Notify("XVISION News Straddle V8 | CANCEL ignored - nothing armed."); }
+         Notify("XVISION News Straddle V9 | CANCEL ignored - nothing armed.");
       else
          PanelCancelSetup();
       return;
    }
-   if(sparam==PREFIX+"BT_MODE")
-   {
-      ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
-      if(g_state==STATE_PENDING || g_state==STATE_ACTIVE)
-      { Notify("XVISION News Straddle V8 | cannot change mode while orders/trades are live."); }
-      else
-      {
-         g_workMode=(g_workMode+1)%3;
-         ObjectSetString(0,sparam,OBJPROP_TEXT,ModeShort(g_workMode));
-         ApplyTrailGreying();
-         g_lastAction="MODE -> "+ModeShort(g_workMode);
-         // persist immediately so a mis-click survives, but do not re-arm
-         GlobalVariableSet(OvrName("MODE"),(double)g_workMode);
-      }
-   }
-   else if(sparam==PREFIX+"BT_APPLY")
-   {
-      ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
-      ApplyFromPanel();
-   }
-   else if(sparam==PREFIX+"BT_RESET")
-   {
-      ObjectSetInteger(0,sparam,OBJPROP_STATE,false);
-      ClearOverrides();
-      if(GlobalVariableCheck(g_globalStateName)) GlobalVariableDel(g_globalStateName);
-      g_workLot=LotSize;
-      g_workBuyDist=BuyStopDistanceMovement;
-      g_workSellDist=SellStopDistanceMovement;
-      g_workBuyTP=BuyTakeProfitMovement;
-      g_workSellTP=SellTakeProfitMovement;
-      g_workBuySL=BuyStopLossMovement;
-      g_workSellSL=SellStopLossMovement;
-      g_workTrail=TrailingStopDistanceMovement;
-   g_workBE=(MoveToBreakEvenFirst?BreakEvenActivationMovement:0.0);
-   g_workMode=(int)ExitMode;
-      ApplySchedule(ParseStrictGMT(NewsDateTimeGMT));
-      if(GlobalVariableCheck(g_globalStateName)) GlobalVariableDel(g_globalStateName);
-      SynchroniseState();
-      SetControlTexts();
-      g_lastAction="PANEL RESET TO INPUTS";
-      Notify("XVISION News Straddle V8 | panel RESET | news "+
-             TimeToString(g_newsGMT,TIME_DATE|TIME_MINUTES)+" | lot "+
-             DoubleToString(g_workLot,2));
-      UpdatePanel();
-   }
-}
-
-void ApplyFromPanel()
-{
-   string tTxt=ObjectGetString(0,PREFIX+"ED_TIME",OBJPROP_TEXT);
-   string lTxt=ObjectGetString(0,PREFIX+"ED_LOT",OBJPROP_TEXT);
-
-   datetime dt=ParseStrictGMT(tTxt);
-   if(dt<=0)
-   {
-      g_lastAction="PANEL: BAD TIME FORMAT";
-      Notify("XVISION News Straddle V8 | invalid time. Use YYYY.MM.DD HH:MI (GMT).");
-      SetControlTexts();
-      return;
-   }
-   double lot=NormalizeLots(StringToDouble(lTxt));
-   if(lot<=0.0)
-   {
-      g_lastAction="PANEL: BAD LOT";
-      Notify("XVISION News Straddle V8 | invalid lot size.");
-      SetControlTexts();
-      return;
-   }
-   double bd=StringToDouble(ObjectGetString(0,PREFIX+"ED_BD",OBJPROP_TEXT));
-   double sd=StringToDouble(ObjectGetString(0,PREFIX+"ED_SD",OBJPROP_TEXT));
-   double tp=StringToDouble(ObjectGetString(0,PREFIX+"ED_TP",OBJPROP_TEXT));
-   double sl=StringToDouble(ObjectGetString(0,PREFIX+"ED_SL",OBJPROP_TEXT));
-   double tl=StringToDouble(ObjectGetString(0,PREFIX+"ED_TR",OBJPROP_TEXT));
-   double be=StringToDouble(ObjectGetString(0,PREFIX+"ED_BE",OBJPROP_TEXT));
-   bool trailOn=(g_workMode==EXIT_TRAILING_ONLY || g_workMode==EXIT_FIXED_TP_AND_TRAILING);
-   bool tpOn=(g_workMode==EXIT_FIXED_TP || g_workMode==EXIT_FIXED_TP_AND_TRAILING);
-   if(bd<=0.0 || sd<=0.0 || sl<=0.0)
-   {
-      g_lastAction="PANEL: BAD PARAMETER";
-      Notify("XVISION News Straddle V8 | B.DIST, S.DIST and SL must be positive.");
-      SetControlTexts(); return;
-   }
-   if(tpOn && tp<=0.0)
-   {
-      g_lastAction="PANEL: BAD TP";
-      Notify("XVISION News Straddle V8 | TP must be positive in a fixed-TP mode.");
-      SetControlTexts(); return;
-   }
-   if(trailOn && tl<=0.0)
-   {
-      g_lastAction="PANEL: BAD TRAIL";
-      Notify("XVISION News Straddle V8 | TRAIL must be positive when a trailing mode is selected.");
-      SetControlTexts(); return;
-   }
-   if(be<0.0)
-   {
-      g_lastAction="PANEL: BAD BREAK-EVEN";
-      Notify("XVISION News Straddle V8 | BREAK-EVEN cannot be negative (use 0 to disable).");
-      SetControlTexts(); return;
-   }
-   if(g_state==STATE_PENDING || g_state==STATE_ACTIVE)
-   {
-      g_lastAction="PANEL: BLOCKED - ORDERS LIVE";
-      Notify("XVISION News Straddle V8 | cannot re-schedule while orders/trades are live. Manage or expire them first.");
-      return;
-   }
-
-   g_workLot=lot;
-   g_workBuyDist=bd; g_workSellDist=sd;
-   g_workBuyTP=tp; g_workSellTP=tp;
-   g_workBuySL=sl; g_workSellSL=sl;
-   g_workTrail=tl; g_workBE=be;
-   ApplySchedule(dt);
-   SaveOverrides();
-   SetControlTexts();
-   g_lastAction="PANEL APPLIED";
-   string warn=(dt<=TimeGMT())?"  (WARNING: time is in the past!)":"";
-   Notify("XVISION News Straddle V8 | APPLIED | news "+
-          TimeToString(dt,TIME_DATE|TIME_MINUTES)+" GMT | lot "+
-          DoubleToString(lot,2)+
-          " | dist B/S "+DoubleToString(bd,1)+"/"+DoubleToString(sd,1)+
-          " | TP "+DoubleToString(tp,1)+" SL "+DoubleToString(sl,1)+
-          " trail "+DoubleToString(tl,1)+" BE "+DoubleToString(be,1)+
-          " | "+ModeShort(g_workMode)+warn);
-   UpdatePanel();
 }
 
 //+------------------------------------------------------------------+
@@ -1777,7 +1526,7 @@ void PanelCloseNow()
    }
    SetState(STATE_COMPLETE);
    g_lastAction="MANUAL CLOSE (panel)";
-   Notify("XVISION News Straddle V8 | CLOSED BY PANEL | "+EventName+
+   Notify("XVISION News Straddle V9 | CLOSED BY PANEL | "+EventName+
           " | positions closed: "+IntegerToString(closed));
    UpdatePanel(); UpdateActionButtons();
 }
@@ -1799,9 +1548,9 @@ void PanelCancelSetup()
    // issued before the placement window opens can never silently re-arm.
    SetState(STATE_CANCELLED);
    g_lastAction="SETUP CANCELLED (panel)";
-   Notify("XVISION News Straddle V8 | SETUP CANCELLED | "+EventName+
+   Notify("XVISION News Straddle V9 | SETUP CANCELLED | "+EventName+
           " | pendings deleted: "+IntegerToString(deleted)+
-          " | will not re-arm for this event (use RESET to re-enable).");
+          " | will not re-arm (set ForceResetEventState=true in F7 to re-enable).");
    UpdatePanel(); UpdateActionButtons();
 }
 
