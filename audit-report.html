@@ -1,0 +1,559 @@
+<title>XVISION Gold Velocity AI EA V4 — Static Audit</title>
+<style>
+  /* ---- Light: the default, and the un-stamped system state ---- */
+  :root{
+    --ground:#EDF0F4; --surface:#FAFBFD; --raised:#FFFFFF;
+    --line:#D5DBE3; --line-soft:#E4E9EF;
+    --ink:#0B111A; --ink-2:#43566B; --ink-3:#6B7D91;
+    --gold:#8A6A0F; --steel:#2C5B85;
+    --sev-block:#A8261C;  --sev-block-bg:#F7E4E2;
+    --sev-med:#B4530C;    --sev-med-bg:#FAEADD;
+    --sev-low:#55677C;    --sev-low-bg:#E7EBF0;
+    --sev-good:#1F6B3F;   --sev-good-bg:#E0EFE6;
+    --shadow:0 1px 2px rgba(11,17,26,.05), 0 6px 20px -12px rgba(11,17,26,.22);
+    --serif:ui-serif,Charter,"Bitstream Charter","Source Serif 4",Cambria,Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  /* ---- Dark: the EA's own MT4 status-panel palette, C'10,16,25' and friends ---- */
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0A1019; --surface:#101A28; --raised:#182436;
+      --line:#2C3D52; --line-soft:#1C2A3C;
+      --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+      --gold:#D9AE47; --steel:#7FB2E0;
+      --sev-block:#E8695E;  --sev-block-bg:#2E1714;
+      --sev-med:#E0913F;    --sev-med-bg:#2B1E10;
+      --sev-low:#8FA3B9;    --sev-low-bg:#18232F;
+      --sev-good:#5FBE85;   --sev-good-bg:#12261B;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A1019; --surface:#101A28; --raised:#182436;
+    --line:#2C3D52; --line-soft:#1C2A3C;
+    --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+    --gold:#D9AE47; --steel:#7FB2E0;
+    --sev-block:#E8695E;  --sev-block-bg:#2E1714;
+    --sev-med:#E0913F;    --sev-med-bg:#2B1E10;
+    --sev-low:#8FA3B9;    --sev-low-bg:#18232F;
+    --sev-good:#5FBE85;   --sev-good-bg:#12261B;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:var(--serif); font-size:17px; line-height:1.62;
+    -webkit-font-smoothing:antialiased; margin:0;
+    padding:0 20px 96px;
+  }
+  .wrap{max-width:74ch; margin:0 auto; display:flex; flex-direction:column; gap:0}
+  p{margin:0 0 .9em}
+  p:last-child{margin-bottom:0}
+  a{color:var(--steel); text-underline-offset:.18em; text-decoration-thickness:.06em}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--gold); outline-offset:3px; border-radius:2px}
+  code,kbd{font-family:var(--mono); font-size:.845em; background:var(--line-soft);
+    padding:.1em .34em; border-radius:3px; word-break:break-word}
+  strong{font-weight:700}
+
+  /* ---------- masthead ---------- */
+  .mast{padding:64px 0 0; display:flex; flex-direction:column; gap:18px}
+  .file{font-family:var(--mono); font-size:.76rem; letter-spacing:.06em;
+    color:var(--ink-3); text-transform:none; word-break:break-all}
+  .mast h1{
+    font-size:clamp(2.05rem,6vw,3.1rem); line-height:1.08; margin:0;
+    font-weight:600; letter-spacing:-.018em; text-wrap:balance;
+  }
+  .mast h1 .x{color:var(--gold)}
+  .rule{height:2px; border:0; margin:0;
+    background:linear-gradient(90deg,var(--gold) 0%,var(--gold) 22%,var(--line) 22%,var(--line) 100%)}
+  .meta{display:flex; flex-wrap:wrap; gap:6px 26px; font-family:var(--mono);
+    font-size:.75rem; letter-spacing:.03em; color:var(--ink-3)}
+  .meta b{color:var(--ink-2); font-weight:500}
+
+  /* ---------- blocks ---------- */
+  section{padding-top:52px; display:flex; flex-direction:column; gap:16px}
+  h2{font-size:1.55rem; line-height:1.2; margin:0; font-weight:600;
+    letter-spacing:-.012em; text-wrap:balance}
+  h3{font-size:1.08rem; margin:0; font-weight:700; letter-spacing:-.005em; text-wrap:balance}
+  .eyebrow{font-family:var(--mono); font-size:.7rem; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--ink-3); margin:0}
+
+  .verdict{background:var(--raised); border:1px solid var(--line);
+    border-radius:4px; padding:26px 28px; box-shadow:var(--shadow);
+    display:flex; flex-direction:column; gap:12px}
+  .verdict .lede{font-size:1.12rem; line-height:1.55}
+  .halt{font-family:var(--mono); font-size:.8rem; letter-spacing:.04em;
+    color:var(--sev-block); background:var(--sev-block-bg);
+    border-left:3px solid var(--sev-block); padding:10px 14px; border-radius:0 3px 3px 0}
+
+  /* ---------- severity tally ---------- */
+  .tally{display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:10px}
+  .tile{background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--tc);
+    border-radius:3px; padding:14px 16px; display:flex; flex-direction:column; gap:2px}
+  .tile .n{font-family:var(--mono); font-size:1.85rem; font-weight:600;
+    line-height:1.1; color:var(--tc); font-variant-numeric:tabular-nums}
+  .tile .l{font-family:var(--mono); font-size:.68rem; letter-spacing:.11em;
+    text-transform:uppercase; color:var(--ink-3)}
+  .t-block{--tc:var(--sev-block)} .t-med{--tc:var(--sev-med)}
+  .t-low{--tc:var(--sev-low)} .t-good{--tc:var(--sev-good)}
+
+  /* ---------- findings ---------- */
+  .find{background:var(--surface); border:1px solid var(--line);
+    border-left:4px solid var(--fc); border-radius:0 4px 4px 0;
+    padding:20px 24px; display:flex; flex-direction:column; gap:12px}
+  .f-block{--fc:var(--sev-block)} .f-med{--fc:var(--sev-med)}
+  .find .hd{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
+  .tag{font-family:var(--mono); font-size:.72rem; font-weight:600; letter-spacing:.06em;
+    color:var(--fc); background:var(--raised); border:1px solid var(--line);
+    padding:2px 7px; border-radius:3px; flex:none}
+  .find h3{flex:1 1 16ch}
+
+  pre{margin:0; background:var(--raised); border:1px solid var(--line);
+    border-radius:3px; padding:14px 16px; overflow-x:auto;
+    font-family:var(--mono); font-size:.775rem; line-height:1.6; color:var(--ink-2)}
+  pre b{color:var(--ink); font-weight:600}
+  pre .cm{color:var(--sev-block)}
+
+  /* ---------- tables ---------- */
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-family:var(--mono);
+    font-size:.775rem; font-variant-numeric:tabular-nums; line-height:1.5}
+  th,td{text-align:left; padding:8px 14px; border-bottom:1px solid var(--line-soft); white-space:nowrap}
+  thead th{font-size:.67rem; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--ink-3); font-weight:500; background:var(--raised);
+    border-bottom:1px solid var(--line); position:sticky; top:0}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  tr.hot td{background:var(--sev-good-bg)}
+  tr.hot td:first-child{font-weight:700; color:var(--ink)}
+  .dom td{color:var(--ink); font-weight:600}
+  .no{color:var(--ink-3)} .yes{color:var(--sev-good); font-weight:600}
+
+  /* p10 bar */
+  .bar{position:relative; display:block; width:118px; height:9px;
+    background:var(--line-soft); border-radius:1px; overflow:visible}
+  .bar i{position:absolute; inset:0 auto 0 0; background:var(--sev-low); border-radius:1px; display:block}
+  tr.hot .bar i,tr.pass .bar i{background:var(--sev-good)}
+  .bar u{position:absolute; top:-3px; bottom:-3px; left:70%; width:2px;
+    background:var(--gold); text-decoration:none}
+
+  ul{margin:0; padding-left:1.15em; display:flex; flex-direction:column; gap:9px}
+  li{padding-left:.15em}
+  ol{margin:0; padding-left:1.4em; display:flex; flex-direction:column; gap:9px}
+  ol li::marker{font-family:var(--mono); font-size:.85em; color:var(--ink-3)}
+
+  .note{border-left:2px solid var(--line); padding-left:16px; color:var(--ink-2); font-size:.95rem}
+  .foot{margin-top:56px; padding-top:22px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.03em;
+    color:var(--ink-3); display:flex; flex-direction:column; gap:6px}
+
+  @media (max-width:560px){
+    body{font-size:16px; padding:0 16px 72px}
+    .mast{padding-top:44px}
+    .verdict,.find{padding:18px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="file">XVISION_Gold_Velocity_AI_EA_V4.mq4 · 1363 lines · MQL4</div>
+    <h1><span class="x">XVISION</span> Gold Velocity AI EA V4 — static audit</h1>
+    <hr class="rule">
+    <div class="meta">
+      <span><b>Date</b> 2026-08-08</span>
+      <span><b>Scope</b> single source file</span>
+      <span><b>Build</b> not compiled</span>
+      <span><b>Broker test</b> none</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="verdict">
+      <p class="eyebrow">Verdict</p>
+      <p class="lede">The signal side is honest work: no lookahead, no repainting, no external
+        dependencies, and two genuinely careful pieces of lot-sizing code. The execution side has one
+        defect that can leave a live position without a stop loss, and one that makes the EA unusable
+        in the Strategy Tester. The larger finding is not a bug at all — <strong>the model is one
+        feature wearing eighteen features' clothing</strong>, and at shipped defaults six of its eight
+        advertised filters do nothing.</p>
+      <p class="halt">Do not run this on a live account until H1 and H2 are fixed.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Findings at a glance</p>
+    <div class="tally">
+      <div class="tile t-block"><span class="n">4</span><span class="l">Blocking</span></div>
+      <div class="tile t-med"><span class="n">9</span><span class="l">Medium</span></div>
+      <div class="tile t-low"><span class="n">8</span><span class="l">Hygiene</span></div>
+      <div class="tile t-good"><span class="n">5</span><span class="l">Done well</span></div>
+    </div>
+    <p class="note">No MetaEditor on the review machine, so the file was <strong>not compiled</strong> —
+      MQL4 API and signature correctness below is by inspection, not by build. Nothing was run against
+      a broker or the Strategy Tester.</p>
+  </section>
+
+  <section>
+    <h2>What it actually does</h2>
+    <p><code>GVCalculate(Symbol(), 1, …)</code> fires once per M5 bar change and reads <strong>shift 1</strong>
+      — the last closed M5 bar. Eighteen features are standardized and pushed through four independent
+      logistic heads (P10, P20, P30, BAD), with monotonicity forced afterwards by
+      <code>p30 = min(p20, min(p10, ·))</code>. A trade is taken when the qualification stack passes,
+      one position at a time, managed by any combination of fixed TP, break-even, trailing, three
+      partials, velocity exit and time stop.</p>
+    <p><strong>No lookahead, confirmed.</strong> <code>h4Shift = iBarShift(H4, m5CloseTime, false) + 1</code>
+      steps back to the last <em>fully closed</em> H4 bar, and <code>h4AgeHours ∈ [0, 12]</code> bounds
+      staleness (lines 246–305). Signals will not repaint. This is the part most retail EAs get wrong,
+      and this one gets right.</p>
+  </section>
+
+  <section>
+    <h2>Blocking issues</h2>
+
+    <article class="find f-block">
+      <div class="hd"><span class="tag">H1</span><h3>A position can end up live with no stop loss, and the EA reports success</h3></div>
+      <p><code>SendEntry</code> (803–913) has an ECN fallback: if <code>OrderSend</code> with stops
+        attached fails with <code>ERR_INVALID_STOPS</code>, it resends with <strong><code>sl=0.0, tp=0.0</code></strong>
+        and then re-attaches the stop via <code>OrderModify</code>. Two paths through that recovery
+        leave the position naked.</p>
+<pre>line 870:  if(!OrderSelect(ticket,SELECT_BY_TICKET))
+           {
+              g_lastAction="ENTRY OPENED; SELECT FAILED";
+              return(true);           <span class="cm">// skips the OrderModify entirely</span>
+           }</pre>
+      <p>If <code>usedFallback</code> was true the order carries no stop, this early return skips the
+        anchoring step, and <code>SendEntry</code> returns <strong>true</strong>.</p>
+<pre>line 891:  if(OrderSelect(ticket,SELECT_BY_TICKET)) CloseSelectedOrder("PROTECTIVE STOP…");
+           g_lastAction="ENTRY ABORTED: STOP SET FAILED";
+           return(false);             <span class="cm">// emergency close never ran</span></pre>
+      <p>If that <code>OrderSelect</code> fails, the emergency close never runs. The panel says
+        <code>ENTRY ABORTED</code>; the position is open and unprotected.</p>
+      <p>Nothing downstream repairs this. <code>ApplyStopManagement</code> (953–1008) only ever produces
+        a stop once break-even or trailing activates, and both default to conditions that may never be
+        met. With <code>UseBreakEven=false</code> and price never reaching
+        <code>TrailingActivationMovement=10.0</code>, the position rides to the time stop with unbounded risk.</p>
+      <p><strong>Fix.</strong> Add an unconditional reconciler at the top of <code>ManagePositionEveryTick</code>:</p>
+<pre>if(InitialStopLossMovement&gt;0.0 &amp;&amp; OrderStopLoss()==0.0)
+{
+   double repair=(OrderType()==OP_BUY ? OrderOpenPrice()-InitialStopLossMovement
+                                      : OrderOpenPrice()+InitialStopLossMovement);
+   if(!OrderModify(OrderTicket(),OrderOpenPrice(),NormalizeDouble(repair,Digits),
+                   OrderTakeProfit(),0,clrNONE))
+      if(++g_stopRepairFailures&gt;=5) CloseSelectedOrder("UNPROTECTED POSITION");
+}</pre>
+      <p>Retrying every tick is the point — it closes both holes above and any future one, without
+        needing to enumerate them.</p>
+    </article>
+
+    <article class="find f-block">
+      <div class="hd"><span class="tag">H2</span><h3><code>SlippagePoints</code> means different things on different gold feeds</h3></div>
+      <p><code>SlippagePoints = 50</code> is passed straight to <code>OrderSend</code> and
+        <code>OrderClose</code>. Points are digit-dependent:</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Gold feed</th><th class="num">Point</th><th class="num">50 points</th></tr></thead>
+        <tbody>
+          <tr><td>2-digit &nbsp;XAUUSD 1234.56</td><td class="num">0.01</td><td class="num">$0.50</td></tr>
+          <tr class="hot"><td>3-digit &nbsp;XAUUSD 1234.567</td><td class="num">0.001</td><td class="num">$0.05</td></tr>
+        </tbody>
+      </table></div>
+      <p>Five cents is tighter than a normal gold spread. On a 3-digit broker every market order bounces
+        with 138 (requote) or 136 (off quotes), and the EA logs <code>ENTRY FAILED 138</code> and moves
+        on. Every <em>other</em> tolerance in this EA is expressed in dollars of gold movement —
+        <code>InitialStopLossMovement</code>, <code>MaximumSpreadMovement</code>,
+        <code>MaximumEntryDeviationMovement</code>. This one input silently breaks that convention.</p>
+      <p><strong>Fix.</strong> Take <code>SlippageMovement</code> as a double in price units and convert
+        at use: <code>(int)MathRound(SlippageMovement/Point)</code>.</p>
+    </article>
+
+    <article class="find f-block">
+      <div class="hd"><span class="tag">H3</span><h3>Full order-history scan on every tick, plus an O(n²) inner loop</h3></div>
+      <p><code>UpdatePanel()</code> runs unconditionally at the end of every <code>OnTick</code>.
+        Its call graph:</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Call</th><th>Cost</th><th class="num">Per tick</th></tr></thead>
+        <tbody>
+          <tr><td>→ LatestEntryTime()</td><td>full history walk</td><td class="num">1</td></tr>
+          <tr class="hot"><td>→ TradesOpenedToday()</td><td>history walk + O(n²) dedupe</td><td class="num">1</td></tr>
+          <tr><td>→ ClosedPnLToday()</td><td>full history walk</td><td class="num">1</td></tr>
+          <tr class="hot"><td>line 1317, TradesOpenedToday() again</td><td>history walk + O(n²) dedupe</td><td class="num">1</td></tr>
+          <tr><td>FindManagedTicket()</td><td>OrdersTotal() walk</td><td class="num">~7</td></tr>
+          <tr><td>ChartRedraw + ~15 object writes</td><td>chart repaint</td><td class="num">1</td></tr>
+        </tbody>
+      </table></div>
+      <p>The dedupe in <code>TradesOpenedToday</code> (645–653, 660–668) compares each candidate against
+        every previously seen open time — quadratic in trades-per-day, on top of a linear history walk
+        it performs twice.</p>
+      <p>Live, on an account with a long history, this stalls the terminal. In the Strategy Tester it is
+        worse: history grows monotonically through the run, so total cost is O(bars × trades²) and a
+        multi-year backtest effectively will not finish. Optimization is out of the question.</p>
+      <p><strong>Fix.</strong> Cache the three day counters, recompute only on a day rollover or an
+        <code>OrdersHistoryTotal()</code> change, and gate <code>UpdatePanel()</code> to once per second
+        or per bar rather than per tick.</p>
+    </article>
+
+    <article class="find f-block">
+      <div class="hd"><span class="tag">H4</span><h3>Partial-profit state lives in terminal GlobalVariables and is never deleted</h3></div>
+      <p>Lines 900–904 write four globals keyed <code>XVG.&lt;account&gt;.&lt;magic&gt;.&lt;OrderOpenTime&gt;</code>
+        — <code>.LOT</code>, <code>.P1</code>, <code>.P2</code>, <code>.P3</code>.
+        <strong><code>GlobalVariableDel</code> is never called anywhere in the file.</strong></p>
+      <ul>
+        <li><strong>Live:</strong> four variables accumulate per trade forever (MT4 expires them only
+          after four weeks without access). Cosmetic, but unbounded.</li>
+        <li><strong>Backtest — this one matters.</strong> GlobalVariables persist across Strategy Tester
+          passes, and the key contains <code>OrderOpenTime()</code>, which <em>repeats exactly</em> when
+          you re-run the same date range. So pass 2 reads pass 1's flags, sees them set, and silently
+          skips every partial close. <strong>Backtests are not reproducible and optimization results are
+          meaningless</strong> for any configuration with <code>UsePartialProfits=true</code>.</li>
+      </ul>
+      <p>Keying by open time rather than ticket was a deliberate and correct choice — MT4 partial closes
+        mint a new ticket while preserving open time, so the flags survive the reissue. The problem is
+        only persistence.</p>
+      <p><strong>Fix.</strong> Drop the globals and derive level completion from remaining volume
+        (<code>OrderLots()</code> against the initial lot recorded in the order comment), which is
+        self-cleaning and tester-safe. Minimum viable: <code>GlobalVariableDel</code> all four keys on
+        position close, plus an <code>IsTesting()</code> branch using an in-memory struct.</p>
+    </article>
+  </section>
+
+  <section>
+    <h2>The model</h2>
+    <p>This is the part that most changes how the EA should be used.</p>
+
+    <h3>One feature carries the model</h3>
+    <p>Influence per one standard deviation of each feature — that is, the raw weights, which is the
+      fair basis for comparison since the features are standardized:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Feature</th><th class="num">P10</th><th class="num">P30</th><th class="num">BAD</th></tr></thead>
+      <tbody>
+        <tr class="dom"><td>h4Body &nbsp;— closed H4 body ÷ H4 ATR14</td><td class="num">0.947</td><td class="num">1.007</td><td class="num">−0.931</td></tr>
+        <tr><td>vel_48 &nbsp;— 4h M5 velocity</td><td class="num">−0.303</td><td class="num">−0.397</td><td class="num">0.290</td></tr>
+        <tr><td>h4Slope</td><td class="num">0.288</td><td class="num">0.354</td><td class="num">−0.281</td></tr>
+        <tr><td>vel_24 &nbsp;— 2h M5 velocity</td><td class="num">−0.302</td><td class="num">−0.302</td><td class="num">0.253</td></tr>
+        <tr><td>eff12</td><td class="num">−0.050</td><td class="num">−0.199</td><td class="num">−0.056</td></tr>
+        <tr><td>h4Gap</td><td class="num">−0.047</td><td class="num">−0.184</td><td class="num">0.083</td></tr>
+        <tr><td>shock</td><td class="num">0.099</td><td class="num">0.090</td><td class="num">−0.014</td></tr>
+        <tr><td>|composite|</td><td class="num">−0.087</td><td class="num">−0.052</td><td class="num">0.123</td></tr>
+        <tr><td class="no">accel, coherence, vel_1/3/6/12, eff3, persist12, volRatio, pullback</td><td class="num no">≤ .09</td><td class="num no">≤ .09</td><td class="num no">≤ .15</td></tr>
+      </tbody>
+    </table></div>
+    <p><code>h4Body</code> is 2.5× the next-largest term and carries the same sign structure across all
+      four heads. The twelve M5 velocity and efficiency features that give the EA its name contribute
+      |w| ≤ 0.09 on P30 — indistinguishable from noise at any realistic feature value.</p>
+
+    <h3>At default inputs, one number decides everything</h3>
+    <p>With every other feature held at its training mean, the gates reduce to a threshold on
+      <code>h4Body</code> alone:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Input</th><th class="num">Default</th><th>Reduces to</th></tr></thead>
+      <tbody>
+        <tr class="hot"><td>MinimumProbability10Percent</td><td class="num">70</td><td>h4Body ≥ 0.909 &nbsp;← binding</td></tr>
+        <tr><td>MinimumProbability30Percent</td><td class="num">20</td><td class="no">h4Body ≥ 0.690 — shadowed by the above</td></tr>
+        <tr><td>MaximumBadBefore10Percent</td><td class="num">100</td><td class="no">pBad ≤ 1.00 — tautology</td></tr>
+        <tr><td>MinimumProbabilityEdgePct</td><td class="num">−30</td><td class="no">holds from h4Body ≥ −0.05 up — never binds</td></tr>
+        <tr><td>MinimumH1PathEfficiencyPct</td><td class="num">5</td><td class="no">eff12 ≥ 0.05 vs training mean 0.141</td></tr>
+        <tr><td>MaximumShockRatio</td><td class="num">2.5</td><td class="no">mean 1.00, SD 0.45 → +3.4 SD guard</td></tr>
+        <tr><td>MaximumVelocityStrength</td><td class="num">2.5</td><td class="no">mean 0.37, SD 0.31 → +6.9 SD guard</td></tr>
+        <tr class="hot"><td>RequireClosedH4Alignment</td><td class="num">true</td><td>EMA8 &gt; EMA21 in direction &nbsp;← binding</td></tr>
+      </tbody>
+    </table></div>
+
+    <p>Sweeping <code>h4Body</code> with all else at the mean. The gold line marks the
+      <code>p10 ≥ 0.70</code> gate:</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="num">h4Body</th><th>p10</th><th class="num">p10</th><th class="num">p30</th><th class="num">pBad</th><th>Qualifies</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0.00</td><td><span class="bar"><i style="width:36.8%"></i><u></u></span></td><td class="num">0.368</td><td class="num">0.075</td><td class="num">0.350</td><td class="no">no</td></tr>
+        <tr><td class="num">0.60</td><td><span class="bar"><i style="width:59.3%"></i><u></u></span></td><td class="num">0.593</td><td class="num">0.178</td><td class="num">0.180</td><td class="no">no</td></tr>
+        <tr><td class="num">0.69</td><td><span class="bar"><i style="width:62.6%"></i><u></u></span></td><td class="num">0.626</td><td class="num">0.200</td><td class="num">0.161</td><td class="no">no</td></tr>
+        <tr class="hot"><td class="num">0.91</td><td><span class="bar"><i style="width:70.0%"></i><u></u></span></td><td class="num">0.700</td><td class="num">0.263</td><td class="num">0.121</td><td class="yes">yes</td></tr>
+        <tr class="pass"><td class="num">1.50</td><td><span class="bar"><i style="width:85.2%"></i><u></u></span></td><td class="num">0.852</td><td class="num">0.482</td><td class="num">0.054</td><td class="yes">yes</td></tr>
+      </tbody>
+    </table></div>
+
+    <p><strong>So the shipped strategy is: enter when the last closed H4 candle has a directional body of
+      at least ~0.91 × H4 ATR(14), the H4 EMA8/EMA21 agree, and M5 velocity points the same way.</strong>
+      That threshold sits at +1.16 SD in <code>h4Body</code>'s own training distribution — roughly the
+      <strong>top 12% of H4 bars</strong>, before the direction and EMA conditions cut it further.</p>
+    <ul>
+      <li>Expect a handful of trades per <strong>month</strong>, not per day.
+        <code>MaximumTradesPerBrokerDay=3</code> will effectively never bind.</li>
+      <li><code>MinimumProbability10Percent</code> is the <strong>only</strong> frequency lever. Lowering
+        <code>MinimumProbability30Percent</code> to get more trades will change nothing, because the P30
+        gate is strictly weaker than the P10 gate at these defaults.</li>
+      <li>Six of the eight "MODEL FILTERS (ADVANCED)" are decoration as shipped.</li>
+    </ul>
+
+    <h3>The model penalizes velocity</h3>
+    <p><code>vel_24</code> and <code>vel_48</code> (2h and 4h M5 velocity, signed toward the trade) enter
+      <strong>negatively</strong> on all three probability heads and positively on BAD.
+      <code>|composite|</code> does too. The model's real preference is a <em>fresh</em> push: a large H4
+      candle in the direction, with the preceding 2–4 hours of M5 <strong>not</strong> yet extended.</p>
+    <p>That is a coherent strategy — early-stage breakout, not momentum continuation — but it is the
+      opposite of what the product name implies, and the EA's own labelling fights it.
+      <code>GV_STATE_ACCELERATING</code> (line 350) highlights precisely the condition the model mildly
+      <em>penalizes</em> (<code>accel</code> weight on P30 is −0.027). A user reading the panel will
+      infer the EA wants acceleration; the coefficients say otherwise.</p>
+
+    <h3>The coefficients cannot be verified from this file</h3>
+    <p>No training window, sample size, instrument, broker feed, out-of-sample split, walk-forward result
+      or calibration curve. <code>p10 ≥ 0.70</code> is a <strong>calibrated-probability</strong> threshold
+      applied to a model whose calibration is unknowable from what is here. The four heads are trained
+      independently and their outputs are not naturally ordered — the <code>min()</code> clamping at
+      329–330 patches that, which means P20 and P30 are frequently not the model's own outputs but
+      P10's, and the "$20" and "$30" probabilities on the panel are then the same number as the "$10" one.</p>
+    <p><code>tradeableReach = 10·(p10+p20+p30)</code> and <code>stopRiskMovement = 15·pBad</code> are
+      computed and <strong>never read anywhere</strong>. The comment at 370–371 correctly disclaims them
+      as not being profit targets. Delete them.</p>
+    <p>Before this trades real money: re-derive or re-validate the coefficients out-of-sample on the
+      actual execution broker's feed, and publish a reliability diagram for P10 — that one threshold is
+      the entire strategy.</p>
+  </section>
+
+  <section>
+    <h2>Medium</h2>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M1</span><h3>Default risk geometry needs a very high strike rate</h3></div>
+      <p>SL $15, no TP, trail arms at +$10 with a $5 distance and a $1 step (lines 411–428). A move that
+        stalls just past activation exits near +$5. A flat 5:15 payoff breaks even at a <strong>75% win
+        rate</strong>; winners can run further, but <code>MaximumHoldingMinutes=240</code> caps how far.
+        Users should be told this explicitly.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M2</span><h3>ATR trail reads the forming bar</h3></div>
+      <p><code>iATR(Symbol(),PERIOD_M1,TrailingATRPeriod,0)</code> at line 978 — shift 0. The trail
+        distance jitters intra-bar and contradicts the EA's own closed-bar discipline. Use shift 1.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M3</span><h3>Stop level and freeze level are summed, not maxed</h3></div>
+      <p><code>minimumStop=(STOPLEVEL+FREEZELEVEL)*Point</code> at line 990. These are separate broker
+        constraints; <strong>summing</strong> them holds the trail further from price than required.
+        <code>MathMax</code> is correct.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M4</span><h3><code>ValidateInputs()</code> rejects silently from six branches</h3></div>
+      <p>Lines 545–556 and 562–567 return false with no <code>Print</code>. The user gets
+        <code>INIT_PARAMETERS_INCORRECT</code> and must bisect ~40 inputs by hand. Name the offending
+        input in every reject.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M5</span><h3>Failed closes are not retried</h3></div>
+      <p><code>ProcessVelocityExit</code> runs only on an M5 bar change; if <code>OrderClose</code> hits
+        135/136/138/146, the exit is dropped for up to five minutes with no retry.
+        <code>CloseSelectedOrder</code> (742–759) should retry about three times with
+        <code>RefreshRates()</code> between attempts.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M6</span><h3><code>MaximumDailyLossCurrency</code> counts closed P/L only</h3></div>
+      <p>It only blocks the next entry — it never closes anything (673–685, 1065). An open position deep
+        underwater does not trip it. Defensible, but the name promises a loss stop.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M7</span><h3>Monday dead zone</h3></div>
+      <p><code>h4AgeHours &gt; 12.0</code> rejects (304–305). After the weekend the last closed H4 bar is
+        Friday's, so age far exceeds 12 and no signal is produced until the first H4 bar of the week
+        closes — 4 to 8 hours into Monday. Correct behaviour, undocumented; users will report the EA as
+        broken.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M8</span><h3>The entry-deviation guard is symmetric</h3></div>
+      <p><code>deviation = MathAbs(executionPrice - referenceEntry)</code> at line 788 blocks a $3
+        favourable move as readily as a $3 adverse one. And $3 of adverse chase against a $15 stop gives
+        away 20% of the risk budget before entry. Consider an asymmetric limit.</p>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">M9</span><h3>Execution guards are loose for gold as shipped</h3></div>
+      <p><code>MaximumSpreadMovement = 2.0</code> ($2.00, against a typical $0.15–$0.40 gold spread) and
+        <code>MaximumEntryDeviationMovement = 3.0</code> (lines 449–450). Neither will fire outside a
+        news dislocation.</p>
+    </article>
+  </section>
+
+  <section>
+    <h2>Hygiene</h2>
+    <ul>
+      <li><strong>Dead code.</strong> <code>ClampValue()</code> defined and never called (497).
+        <code>GV_TARGET_MOVEMENT</code> and <code>GV_TARGET_HORIZON_MIN</code> defined and never used.
+        Ten <code>GVResult</code> fields assigned and never read: <code>tradeableReach</code>,
+        <code>stopRiskMovement</code>, <code>confidence</code>, <code>atrM5</code>,
+        <code>velocityM5/M15/H1</code>, <code>pathQuality</code>, <code>velocityStrength</code>,
+        <code>shockRatio</code>. <code>ArrayInitialize(velocity,0.0)</code> at 259 is overwritten on the
+        next line.</li>
+      <li><strong>Naming drift between engine and UI.</strong> <code>thresholds.minimumContinuation</code>
+        is commented "P($10 before $15 stop)" and gates <code>p10</code>, but the panel's CONTINUATION
+        reads <code>1 − pBad</code> — two different quantities under one name.
+        <code>minimumEfficiencyM15</code> is fed by <code>MinimumH1PathEfficiencyPct</code> and gates
+        <code>efficiency12</code> (12 M5 bars = 1 hour): the H1 label is right, the M15 field name is
+        wrong. <code>GV_STATE_EXHAUSTING</code> renders as "STOP RISK".</li>
+      <li><strong>State and label can disagree.</strong> <code>GV_STATE_H4_CONFLICT</code> is unreachable
+        when <code>RequireClosedH4Alignment=false</code> (334, 345), yet the panel prints "H4 CONFLICT"
+        independently from <code>h4Alignment &gt; 0.0</code> (1264).</li>
+      <li><strong>A single flat bar kills the signal.</strong> <code>GVTrueRange</code> returns 0.0 on a
+        degenerate bar and <code>GVATR</code> propagates that to 0.0, aborting the whole calculation
+        (223–233). Quiet rollover or a feed gap silently skips the bar. Fails safe, but silently.</li>
+      <li><code>PositionKey()</code> (704–707) depends on an order already being selected, with nothing
+        enforcing it. Pass the ticket in.</li>
+      <li><code>UpdatePanel</code> selects the same order twice to build one string (1256–1260).</li>
+      <li><code>NormaliseLots</code> caps at <code>MODE_MAXLOT</code> with no warning (520) — in
+        risk-percent mode on a large account, realized risk quietly falls below the configured percent.</li>
+      <li><code>EnableEntryPopupAlert = true</code> by default fires a <strong>modal</strong>
+        <code>Alert()</code> on every entry on a live account (910).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What is done well</h2>
+    <p>Worth stating, because these are the things retail EAs usually get wrong:</p>
+    <ul>
+      <li><strong>No lookahead, no repaint.</strong> Closed-bar discipline is real and correctly
+        implemented, including the H4 back-step and the staleness bound.</li>
+      <li><strong><code>NormaliseLots</code> refuses to round <em>up</em>.</strong>
+        <code>if(requested &lt; minimum-1e-10) return(0.0)</code> at 518 — it will not silently inflate a
+        sub-minimum request to the broker minimum. <code>CalculateLots</code> does the same at 728. Most
+        EAs quietly over-risk here.</li>
+      <li><strong><code>GetLastError()</code> captured once</strong> into <code>firstError</code> before
+        reuse (844), rather than being re-read after it has been cleared.</li>
+      <li><strong><code>EnableAutomaticEntries</code> defaults to false.</strong> Ships in signal-only mode.</li>
+      <li><strong>No hidden dependencies.</strong> Verified absent: <code>#import</code>, DLL,
+        <code>FileOpen</code>/<code>FileWrite</code>, <code>WebRequest</code>, obfuscation,
+        account-number check, expiry logic. The only outbound call is <code>SendNotification</code>
+        (MT4-native push, off by default). The header's "No DLL, file, network or Python dependency"
+        claim is accurate.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Recommended order of work</h2>
+    <ol>
+      <li><strong>H1</strong> — stop-loss reconciler in <code>ManagePositionEveryTick</code>. Blocks live use.</li>
+      <li><strong>H2</strong> — slippage in price units. Blocks live use on 3-digit feeds.</li>
+      <li><strong>H3 + H4</strong> — cache the day counters, throttle the panel, remove the
+        GlobalVariable dependency. Blocks any credible backtest.</li>
+      <li><strong>M4</strong> — named validation errors, so the next items are diagnosable at all.</li>
+      <li><strong>M2, M3, M5</strong> — trailing and close-retry correctness.</li>
+      <li>Re-validate the model coefficients out-of-sample, then revisit the default thresholds knowing
+        that <code>MinimumProbability10Percent</code> is the only one that does anything.</li>
+      <li>Delete the dead fields and fix the naming drift.</li>
+    </ol>
+    <p class="note"><strong>Not yet done:</strong> the file has not been compiled or run. After the fixes
+      above it needs a MetaEditor build under <code>#property strict</code>, then a tick-data backtest on
+      the target broker's gold feed, then forward testing on demo.</p>
+  </section>
+
+  <footer class="foot">
+    <span>Static review of XVISION_Gold_Velocity_AI_EA_V4.mq4 — 1363 lines, no build, no broker test.</span>
+    <span>Dark theme palette taken from the EA's own MT4 status panel inputs, C'10,16,25' through C'238,243,248'.</span>
+  </footer>
+
+</div>
