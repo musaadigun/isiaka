@@ -157,9 +157,20 @@ Sweeping `h4Body` with all else at the mean:
 **So the shipped strategy is: enter when the last closed H4 candle has a directional body of at least ~0.91 × H4 ATR(14), the H4 EMA8/EMA21 agree, and M5 velocity points the same way.** That threshold sits at +1.16 SD in `h4Body`'s own training distribution — roughly the **top 12% of H4 bars**, before the direction and EMA conditions cut it further.
 
 Practical consequences:
-- Expect a handful of trades per **month**, not per day. `MaximumTradesPerBrokerDay=3` will effectively never bind.
-- `MinimumProbability10Percent` is the **only** frequency lever. A user who lowers `MinimumProbability30Percent` expecting more trades will observe no change whatsoever, because the P30 gate is strictly weaker than the P10 gate at these defaults.
-- Six of the eight "MODEL FILTERS (ADVANCED)" are decoration as shipped.
+> **Corrected 2026-08-08 after backtesting** (see `backtest/BACKTEST.md` §9). The reduction above is
+> right in isolation and misleading in practice: the features co-vary, so `h4Slope` and the 2h/4h
+> velocity terms push z up at the same time `h4Body` does. Measured on 12.4 months of real data,
+> **36% of qualified signals have `h4Body` below 0.909** (median 1.070, minimum −0.327). The three
+> conclusions that stood here were wrong:
+>
+> - "a handful of trades per month" → actually **30.7 per month**, ~1.4 per trading day.
+> - "`MaximumTradesPerBrokerDay=3` will never bind" → it is the **largest entry block, 483 signals rejected**.
+> - "six of eight filters are decoration" → **four bind clearly** (H4 alignment uniquely blocks 914
+>   signals, path efficiency 793, velocity-strength band 595, P10 547); two are near-inert (shock 19,
+>   P30 10); **two are genuinely inert** — `MaximumBadBefore10Percent` and `MinimumProbabilityEdgePct`.
+>
+> What survives: the P30 gate really is shadowed by P10, two inputs really are dead, and `h4Body`
+> really does dominate the model by weight.
 
 ### The model penalizes velocity
 
@@ -174,6 +185,12 @@ No training window, sample size, instrument, broker feed, out-of-sample split, w
 `tradeableReach = 10·(p10+p20+p30)` and `stopRiskMovement = 15·pBad` are computed and **never read anywhere**. The comment at `370-371` correctly disclaims them as not being profit targets. Delete them.
 
 Before this trades real money: re-derive or re-validate the coefficients out-of-sample on the actual execution broker's feed, and publish a reliability diagram for P10 — that one threshold is the entire strategy.
+
+> **Answered by the backtest.** Over 380 executed trades the probability output shows **no
+> discriminative power**: expectancy by `p10` quartile runs +$1.02 / +$0.10 / +$2.87 / **−$0.79**, with
+> correlation(`p10`, P/L) = **−0.036**. The highest-confidence quartile is the only losing one. `p30`
+> (−0.017) and `h4Body` (−0.061) behave the same way, and relaxing `MinimumProbability10Percent` from
+> 70 to 50 **raises** net profit from $304 to $421 while lowering drawdown.
 
 ---
 

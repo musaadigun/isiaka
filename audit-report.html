@@ -86,6 +86,11 @@
   .halt{font-family:var(--mono); font-size:.8rem; letter-spacing:.04em;
     color:var(--sev-block); background:var(--sev-block-bg);
     border-left:3px solid var(--sev-block); padding:10px 14px; border-radius:0 3px 3px 0}
+  .corr{background:var(--sev-med-bg); border-left:3px solid var(--sev-med);
+    padding:14px 18px; border-radius:0 3px 3px 0; font-size:.95rem; color:var(--ink-2)}
+  .corr b{color:var(--ink)}
+  .corr .tagline{font-family:var(--mono); font-size:.68rem; letter-spacing:.13em;
+    text-transform:uppercase; color:var(--sev-med); display:block; margin-bottom:6px}
 
   /* ---------- severity tally ---------- */
   .tally{display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:10px}
@@ -180,6 +185,15 @@
         feature wearing eighteen features' clothing</strong>, and at shipped defaults six of its eight
         advertised filters do nothing.</p>
       <p class="halt">Do not run this on a live account until H1 and H2 are fixed.</p>
+    </div>
+    <div class="corr">
+      <span class="tagline">Corrected 2026-08-08 after backtesting</span>
+      A backtest on 12.4 months of the broker's own gold data contradicts three of this audit's
+      claims about <em>trade frequency</em> and <em>which filters bind</em> — corrections are marked
+      inline below. The structural findings (H1–H4, the medium list, the weight analysis) are
+      unaffected. The backtest also settles the open question this audit could only raise: the model's
+      probability output <b>does not rank outcomes</b> — trades in its highest-confidence quartile lose
+      money, and loosening its flagship filter improves results.
     </div>
   </section>
 
@@ -377,14 +391,27 @@
       at least ~0.91 × H4 ATR(14), the H4 EMA8/EMA21 agree, and M5 velocity points the same way.</strong>
       That threshold sits at +1.16 SD in <code>h4Body</code>'s own training distribution — roughly the
       <strong>top 12% of H4 bars</strong>, before the direction and EMA conditions cut it further.</p>
-    <ul>
-      <li>Expect a handful of trades per <strong>month</strong>, not per day.
-        <code>MaximumTradesPerBrokerDay=3</code> will effectively never bind.</li>
-      <li><code>MinimumProbability10Percent</code> is the <strong>only</strong> frequency lever. Lowering
-        <code>MinimumProbability30Percent</code> to get more trades will change nothing, because the P30
-        gate is strictly weaker than the P10 gate at these defaults.</li>
-      <li>Six of the eight "MODEL FILTERS (ADVANCED)" are decoration as shipped.</li>
-    </ul>
+    <div class="corr">
+      <span class="tagline">Corrected — this reduction is right in isolation, misleading in practice</span>
+      Holding the other seventeen features at their training mean is what makes the arithmetic above
+      tractable, and it is also what makes it wrong as a description of live behaviour. The features
+      <b>co-vary</b>: when <code>h4Body</code> is large, <code>h4Slope</code> is large too (same-sign
+      weight) and the 2h/4h velocity features sit below their means (opposite-sign weight), so both push
+      z up at the same time. Measured on 12.4 months of real data, <b>36% of qualified signals have
+      <code>h4Body</code> below 0.909</b> (median 1.070, minimum −0.327). The three bullets that used to
+      sit here drew the wrong practical conclusions from the right algebra:
+      <ul style="margin-top:10px">
+        <li>"a handful of trades per month" → actually <b>30.7 per month</b>, about 1.4 per trading day.</li>
+        <li>"<code>MaximumTradesPerBrokerDay=3</code> will never bind" → it is the <b>single largest entry
+          block, rejecting 483 signals</b>.</li>
+        <li>"six of eight model filters are decoration" → <b>four bind clearly</b> (H4 alignment 914
+          signals uniquely blocked, path efficiency 793, velocity-strength band 595, P10 547); two are
+          near-inert (shock 19, P30 10); <b>two are genuinely inert</b> —
+          <code>MaximumBadBefore10Percent</code> and <code>MinimumProbabilityEdgePct</code>, both 0.</li>
+      </ul>
+      <p style="margin:10px 0 0">What survives: the P30 gate really is shadowed by the P10 gate, two
+      inputs really are dead, and <code>h4Body</code> really does dominate the model by weight.</p>
+    </div>
 
     <h3>The model penalizes velocity</h3>
     <p><code>vel_24</code> and <code>vel_48</code> (2h and 4h M5 velocity, signed toward the trade) enter
@@ -410,6 +437,15 @@
     <p>Before this trades real money: re-derive or re-validate the coefficients out-of-sample on the
       actual execution broker's feed, and publish a reliability diagram for P10 — that one threshold is
       the entire strategy.</p>
+    <div class="corr">
+      <span class="tagline">Answered by the backtest</span>
+      This concern is no longer hypothetical. Over 380 executed trades the probability output shows
+      <b>no discriminative power</b>: expectancy by <code>p10</code> quartile runs +$1.02 / +$0.10 /
+      +$2.87 / <b>−$0.79</b>, with correlation(<code>p10</code>, P/L) = <b>−0.036</b>. The highest-
+      confidence quartile is the only losing one. <code>p30</code> (−0.017) and <code>h4Body</code>
+      (−0.061) behave the same way, and relaxing <code>MinimumProbability10Percent</code> from 70 to 50
+      <b>raises</b> net profit from $304 to $421 while lowering drawdown.
+    </div>
   </section>
 
   <section>

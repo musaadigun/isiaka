@@ -1,0 +1,531 @@
+<title>XVISION Gold Velocity AI EA V4 — Profitability Backtest</title>
+<style>
+  :root{
+    --ground:#EDF0F4; --surface:#FAFBFD; --raised:#FFFFFF;
+    --line:#D5DBE3; --line-soft:#E4E9EF; --grid:#E7ECF1;
+    --ink:#0B111A; --ink-2:#43566B; --ink-3:#6B7D91;
+    --gold:#8A6A0F; --steel:#2C5B85;
+    --sev-block:#A8261C;  --sev-block-bg:#F7E4E2;
+    --sev-med:#B4530C;    --sev-med-bg:#FAEADD;
+    --sev-good:#1F6B3F;   --sev-good-bg:#E0EFE6;
+    --s1:#2a78d6; --s2:#eb6834; --pos:#2a78d6; --neg:#e34948;
+    --shadow:0 1px 2px rgba(11,17,26,.05), 0 6px 20px -12px rgba(11,17,26,.22);
+    --serif:ui-serif,Charter,"Bitstream Charter","Source Serif 4",Cambria,Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0A1019; --surface:#101A28; --raised:#182436;
+      --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+      --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+      --gold:#D9AE47; --steel:#7FB2E0;
+      --sev-block:#E8695E;  --sev-block-bg:#2E1714;
+      --sev-med:#E0913F;    --sev-med-bg:#2B1E10;
+      --sev-good:#5FBE85;   --sev-good-bg:#12261B;
+      --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A1019; --surface:#101A28; --raised:#182436;
+    --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+    --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+    --gold:#D9AE47; --steel:#7FB2E0;
+    --sev-block:#E8695E;  --sev-block-bg:#2E1714;
+    --sev-med:#E0913F;    --sev-med-bg:#2B1E10;
+    --sev-good:#5FBE85;   --sev-good-bg:#12261B;
+    --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--ground); color:var(--ink); font-family:var(--serif);
+    font-size:17px; line-height:1.62; -webkit-font-smoothing:antialiased;
+    margin:0; padding:0 20px 96px}
+  .wrap{max-width:74ch; margin:0 auto}
+  p{margin:0 0 .9em} p:last-child{margin-bottom:0}
+  a{color:var(--steel); text-underline-offset:.18em}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--gold); outline-offset:3px; border-radius:2px}
+  code{font-family:var(--mono); font-size:.845em; background:var(--line-soft);
+    padding:.1em .34em; border-radius:3px; word-break:break-word}
+
+  .mast{padding:64px 0 0; display:flex; flex-direction:column; gap:18px}
+  .file{font-family:var(--mono); font-size:.76rem; letter-spacing:.06em; color:var(--ink-3)}
+  .mast h1{font-size:clamp(2.05rem,6vw,3.1rem); line-height:1.08; margin:0;
+    font-weight:600; letter-spacing:-.018em; text-wrap:balance}
+  .mast h1 .x{color:var(--gold)}
+  .rule{height:2px; border:0; margin:0;
+    background:linear-gradient(90deg,var(--gold) 0%,var(--gold) 22%,var(--line) 22%,var(--line) 100%)}
+  .meta{display:flex; flex-wrap:wrap; gap:6px 26px; font-family:var(--mono);
+    font-size:.75rem; letter-spacing:.03em; color:var(--ink-3)}
+  .meta b{color:var(--ink-2); font-weight:500}
+
+  section{padding-top:52px; display:flex; flex-direction:column; gap:16px}
+  h2{font-size:1.55rem; line-height:1.2; margin:0; font-weight:600; letter-spacing:-.012em; text-wrap:balance}
+  h3{font-size:1.06rem; margin:0; font-weight:700; text-wrap:balance}
+  .eyebrow{font-family:var(--mono); font-size:.7rem; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--ink-3); margin:0}
+
+  .verdict{background:var(--raised); border:1px solid var(--line); border-radius:4px;
+    padding:26px 28px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:12px}
+  .verdict .lede{font-size:1.12rem; line-height:1.55}
+  .halt{font-family:var(--mono); font-size:.8rem; letter-spacing:.04em; color:var(--sev-block);
+    background:var(--sev-block-bg); border-left:3px solid var(--sev-block);
+    padding:10px 14px; border-radius:0 3px 3px 0}
+
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px}
+  .tile{background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--tc);
+    border-radius:3px; padding:14px 16px; display:flex; flex-direction:column; gap:2px}
+  .tile .n{font-family:var(--mono); font-size:1.6rem; font-weight:600; line-height:1.15;
+    color:var(--tc); font-variant-numeric:tabular-nums}
+  .tile .l{font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--ink-3)}
+  .tile .s{font-size:.82rem; color:var(--ink-2); line-height:1.35; margin-top:3px}
+  .t-a{--tc:var(--s1)} .t-b{--tc:var(--s2)} .t-c{--tc:var(--sev-med)} .t-d{--tc:var(--ink-3)}
+
+  figure{margin:0; background:var(--surface); border:1px solid var(--line);
+    border-radius:4px; padding:18px 18px 12px; display:flex; flex-direction:column; gap:10px}
+  figcaption{font-size:.9rem; color:var(--ink-2); line-height:1.5}
+  figcaption b{color:var(--ink); font-weight:600}
+  .chart-hd{display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px}
+  .chart-hd h3{font-size:.98rem}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; font-family:var(--mono); font-size:.72rem; color:var(--ink-2)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .swatch{width:14px; height:3px; border-radius:2px; display:inline-block}
+  .plot{position:relative; width:100%}
+  .plot svg{display:block; width:100%; height:auto; overflow:visible}
+  .tip{position:absolute; pointer-events:none; opacity:0; transition:opacity .1s;
+    background:var(--raised); border:1px solid var(--line); border-radius:3px;
+    box-shadow:var(--shadow); padding:7px 10px; font-family:var(--mono); font-size:.7rem;
+    line-height:1.5; color:var(--ink); white-space:nowrap; z-index:5;
+    font-variant-numeric:tabular-nums}
+  .tip .k{color:var(--ink-3)}
+  details{border-top:1px solid var(--line-soft); padding-top:8px}
+  summary{cursor:pointer; font-family:var(--mono); font-size:.7rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--ink-3)}
+  details[open] summary{margin-bottom:8px}
+
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-family:var(--mono); font-size:.775rem;
+    font-variant-numeric:tabular-nums; line-height:1.5}
+  th,td{text-align:left; padding:8px 14px; border-bottom:1px solid var(--line-soft); white-space:nowrap}
+  thead th{font-size:.67rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+    font-weight:500; background:var(--raised); border-bottom:1px solid var(--line)}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  tr.hi td{background:var(--sev-good-bg)} tr.hi td:first-child{font-weight:700; color:var(--ink)}
+  tr.lo td{background:var(--sev-block-bg)}
+  .no{color:var(--ink-3)}
+  .up{color:var(--sev-good)} .dn{color:var(--sev-block)}
+
+  ul,ol{margin:0; padding-left:1.2em; display:flex; flex-direction:column; gap:9px}
+  ol li::marker{font-family:var(--mono); font-size:.85em; color:var(--ink-3)}
+  .note{border-left:2px solid var(--line); padding-left:16px; color:var(--ink-2); font-size:.95rem}
+  .foot{margin-top:56px; padding-top:22px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:.72rem; color:var(--ink-3);
+    display:flex; flex-direction:column; gap:6px}
+  @media (max-width:560px){
+    body{font-size:16px; padding:0 14px 72px} .mast{padding-top:44px}
+    .verdict{padding:18px} figure{padding:14px 12px 10px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="file">XVISION_Gold_Velocity_AI_EA_V4.mq4 · 380 trades · 2025-07-24 → 2026-08-07</div>
+    <h1><span class="x">XVISION</span> Gold Velocity AI EA V4 — profitability backtest</h1>
+    <hr class="rule">
+    <div class="meta">
+      <span><b>Date</b> 2026-08-08</span>
+      <span><b>Engine</b> Python port, not MT4</span>
+      <span><b>Data</b> supplied M1/M5/H1 gold</span>
+      <span><b>Costs</b> spread modelled</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="verdict">
+      <p class="eyebrow">Verdict</p>
+      <p class="lede">The EA is close to break-even, and <strong>this data cannot establish that it is
+        profitable</strong>. It returns +$304 on a $10,000 account over 12.4 months under the shipped
+        defaults — but flipping one unresolvable modelling assumption takes that to −$85, the result is
+        not statistically distinguishable from zero, and every dollar of it comes from the first half of
+        the sample.</p>
+      <p class="halt">The model's own probability output does not rank outcomes. Loosening its flagship
+        filter from 0.70 to 0.50 <em>increases</em> net profit.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Headline numbers — shipped defaults, $0.30 spread</p>
+    <div class="tiles">
+      <div class="tile t-a"><span class="n">+$304</span><span class="l">Net, stop-first</span>
+        <span class="s">PF 1.15 · 58.7% win · 380 trades</span></div>
+      <div class="tile t-b"><span class="n">−$85</span><span class="l">Net, trail-first</span>
+        <span class="s">Same bars, other intrabar order</span></div>
+      <div class="tile t-c"><span class="n">1.21</span><span class="l">t-statistic</span>
+        <span class="s">95% CI −$182 … +$797</span></div>
+      <div class="tile t-d"><span class="n">+$927</span><span class="l">Buy &amp; hold</span>
+        <span class="s">Same 0.01 lot, same window</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The bracket is wider than the result</h2>
+    <p>Both curves below are the same 380 signals through the same management code. They differ only in
+      which extreme of each bar price is assumed to touch first — an ordering that OHLC data does not
+      record. Real price takes <em>some</em> path between them.</p>
+
+    <figure>
+      <div class="chart-hd">
+        <h3>Cumulative net P/L, $10,000 account, 0.01 lots</h3>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--s1)"></i>stop checked first</span>
+          <span><i class="swatch" style="background:var(--s2)"></i>trail advances first</span>
+        </div>
+      </div>
+      <div class="plot" id="p-eq"><div class="tip" id="t-eq"></div></div>
+      <figcaption>The two readings end <b>$389 apart</b> and land on opposite sides of zero. Until tick
+        data closes that gap, the sign of this backtest is undetermined.</figcaption>
+      <details><summary>Data table</summary><div class="scroll"><table id="tbl-eq">
+        <thead><tr><th>Month end</th><th class="num">Stop-first cum.</th><th class="num">Trail-first cum.</th></tr></thead>
+        <tbody></tbody></table></div></details>
+    </figure>
+  </section>
+
+  <section>
+    <h2>All of the profit is in the first half</h2>
+    <figure>
+      <div class="chart-hd"><h3>Net P/L by month, stop-first</h3></div>
+      <div class="plot" id="p-mth"><div class="tip" id="t-mth"></div></div>
+      <figcaption>Ten of fourteen months are positive, but the cumulative curve is flat from February
+        onward. Split at the median trade: first 190 trades <b>+$303.23</b> (PF 1.387), second 190
+        <b>+$0.70</b> (PF 1.001).</figcaption>
+    </figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Half</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Win</th><th class="num">Expectancy</th></tr></thead>
+      <tbody>
+        <tr><td>2025-07-25 → 2026-01-26</td><td class="num">190</td><td class="num up">+$303.23</td><td class="num">1.387</td><td class="num">61.6%</td><td class="num">+$1.60</td></tr>
+        <tr class="lo"><td>2026-01-27 → 2026-08-06</td><td class="num">190</td><td class="num">+$0.70</td><td class="num">1.001</td><td class="num">55.8%</td><td class="num">+$0.00</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>The model does not rank outcomes</h2>
+    <p>This finding is independent of every costing assumption. If the probability heads carried
+      information, trade quality would rise with <code>p10</code>. It does not.</p>
+    <figure>
+      <div class="chart-hd"><h3>Expectancy per trade by <code>p10</code> quartile</h3></div>
+      <div class="plot" id="p-q"><div class="tip" id="t-q"></div></div>
+      <figcaption>correlation(<code>p10</code>, trade P/L) = <b>−0.036</b>. The highest-confidence
+        quartile is the only losing one. <code>p30</code> behaves the same way (−0.017), and so does
+        <code>h4Body</code>, the feature that dominates the model (−0.061).</figcaption>
+    </figure>
+    <p>The parameter sweep says it from the other direction — filtering harder makes the result worse
+      and the drawdown no better:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>MinimumProbability10Percent</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Max DD</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td>50</td><td class="num">458</td><td class="num">+$420.54</td><td class="num">1.175</td><td class="num">$196.95</td></tr>
+        <tr><td>60</td><td class="num">456</td><td class="num">+$402.61</td><td class="num">1.168</td><td class="num">$196.95</td></tr>
+        <tr><td>70 &nbsp;(shipped)</td><td class="num">380</td><td class="num">+$303.93</td><td class="num">1.150</td><td class="num">$214.66</td></tr>
+        <tr><td>80</td><td class="num">222</td><td class="num">+$166.65</td><td class="num">1.143</td><td class="num">$123.81</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">A random-direction control — same entry times, same management, direction replaced by
+      a coin flip, 300 runs — has mean +$60 and standard deviation $235. The real model's +$304 sits at
+      the <strong>84th percentile</strong> of that distribution. Better than chance, but not by a margin
+      that survives scrutiny.</p>
+  </section>
+
+  <section>
+    <h2>Costs and defaults</h2>
+    <p>The gross edge is $418 over 380 trades — <strong>$1.10 per trade, about one cent of gold
+      movement</strong>. Spread eats $114 of it at $0.30.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Spread</th><th class="num">Net</th><th class="num">PF</th><th>Variant (stop-first, $0.30)</th><th class="num">Net</th><th class="num">Max DD</th></tr></thead>
+      <tbody>
+        <tr><td>$0.00</td><td class="num">+$399.65</td><td class="num">1.203</td><td>Shipped default</td><td class="num">+$303.93</td><td class="num">$214.66</td></tr>
+        <tr><td>$0.15</td><td class="num">+$351.27</td><td class="num">1.175</td><td class="no">No time stop</td><td class="num up">+$583.25</td><td class="num">$181.76</td></tr>
+        <tr><td>$0.30</td><td class="num">+$303.93</td><td class="num">1.150</td><td class="no">No 3-per-day cap</td><td class="num up">+$663.75</td><td class="num">$219.73</td></tr>
+        <tr><td>$0.50</td><td class="num">+$260.29</td><td class="num">1.128</td><td class="no">SL 15, TP 30, no trail</td><td class="num up">+$492.06</td><td class="num">$277.99</td></tr>
+        <tr><td>$0.80</td><td class="num">+$114.88</td><td class="num">1.055</td><td class="no">SL 15, trail 5/3</td><td class="num up">+$375.61</td><td class="num">$122.26</td></tr>
+      </tbody>
+    </table></div>
+    <p>Both shipped throttles — <code>MaximumHoldingMinutes=240</code> and
+      <code>MaximumTradesPerBrokerDay=3</code> — <strong>cost money</strong> in this sample, and a tighter
+      trail produces a higher profit factor at half the drawdown. Read that cautiously in both
+      directions: these are 380-trade samples inside a result already indistinguishable from zero, so the
+      rows are not significantly different from each other either. The supportable conclusion is not "use
+      trail 5/3" — it is that <strong>the shipped defaults are not a tuned configuration</strong>.</p>
+  </section>
+
+  <section>
+    <h2>Corrections to the audit</h2>
+    <p>The backtest contradicts three claims in the earlier audit. The ceteris-paribus method used there
+      — solving each gate with all other features at their training mean — was misleading, because the
+      features co-vary: when <code>h4Body</code> is large, <code>h4Slope</code> is large too (same-sign
+      weight) and the 2h/4h velocity features sit below their means (opposite-sign weight), so the
+      <code>h4Body</code> needed in live data is far below the isolated figure.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Audit claim</th><th>Measured</th></tr></thead>
+      <tbody>
+        <tr><td class="no">"a handful of trades per month"</td><td><strong>30.7/month</strong>, ~1.4 per trading day</td></tr>
+        <tr><td class="no">"the 3/day cap will never bind"</td><td>the <strong>largest entry block — 483 rejected</strong></td></tr>
+        <tr><td class="no">"six of eight filters are decoration"</td><td><strong>four bind</strong>, two near-inert, two inert</td></tr>
+        <tr><td class="no">"reduces to h4Body ≥ 0.909"</td><td>true in isolation; <strong>36%</strong> of qualified signals sit below it</td></tr>
+      </tbody>
+    </table></div>
+    <p>Measured marginally — signals passing every other gate but failing this one:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Gate</th><th class="num">Uniquely blocks</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>RequireClosedH4Alignment</td><td class="num">914</td><td>binds</td></tr>
+        <tr><td>MinimumH1PathEfficiencyPct</td><td class="num">793</td><td>binds</td></tr>
+        <tr><td>velocity-strength band</td><td class="num">595</td><td>binds</td></tr>
+        <tr><td>MinimumProbability10Percent</td><td class="num">547</td><td>binds</td></tr>
+        <tr><td>MaximumShockRatio</td><td class="num">19</td><td class="no">near-inert</td></tr>
+        <tr><td>MinimumProbability30Percent</td><td class="num">10</td><td class="no">near-inert (shadowed, as the audit said)</td></tr>
+        <tr><td>MaximumBadBefore10Percent</td><td class="num">0</td><td class="no">inert</td></tr>
+        <tr><td>MinimumProbabilityEdgePct</td><td class="num">0</td><td class="no">inert</td></tr>
+      </tbody>
+    </table></div>
+    <p>What survives unchanged: <code>h4Body</code> dominates the model by weight, two inputs are
+      genuinely inert, and the coefficients cannot be validated from the source. The quartile analysis
+      above is the empirical form of that last point.</p>
+  </section>
+
+  <section>
+    <h2>Method, and what it cannot claim</h2>
+    <p>This is an independent Python re-implementation of <code>GVCalculate</code> and the EA's
+      execution layer — <strong>not MetaTrader's Strategy Tester</strong>, which needs MetaEditor. Four
+      validation checks were run first: H4 rebuilt from the 10-year H1 series matches H4 aggregated from
+      M5 to <strong>$0.000</strong> on all 1,192 buckets complete in both feeds; M5→H1 aggregation matches
+      the H1 file to $0.007 mean over 5,531 bars; no duplicates, OHLC violations or zero-range bars in any
+      file; and a harness bug that silently disabled the H4 gate was caught by cross-checking the
+      qualified-signal count two ways, then fixed before any result here was produced.</p>
+    <ol>
+      <li><strong>No tick data.</strong> The intrabar ordering assumption is the largest source of
+        uncertainty and it flips the sign. Closing this is the single highest-value next step.</li>
+      <li><strong>Constant spread.</strong> Real gold spreads widen at rollover and on news — exactly
+        when <code>shock</code> is high and this EA still trades. A time-varying spread would hurt more
+        than the flat sweep suggests.</li>
+      <li><strong>12.4 months, one instrument, one regime</strong> — a strong gold bull market, with 380
+        trades for a per-trade edge of $0.80.</li>
+      <li><strong>Two feed holes</strong> — 22.7 days and 13.3 days, about 10% of the window. 11,740 M5
+        bars were excluded because their lookback spans a hole.</li>
+      <li><code>EnableAutomaticEntries</code> was forced true. <strong>As shipped it is false</strong>,
+        so the EA out of the box takes no trades at all.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What to do next</h2>
+    <ol>
+      <li><strong>Get tick data for this window and re-run.</strong> Until the bracket collapses, no
+        configuration decision is supportable. Nothing else changes what is knowable.</li>
+      <li><strong>Fix audit findings H1 and H3 first.</strong> The per-tick history scans make a
+        multi-year MT4 tester run impractical, and the naked-stop path is a live blocker regardless.</li>
+      <li><strong>Re-derive the model, or drop it.</strong> The probability heads add nothing here.
+        Either retrain on this broker's feed with a real out-of-sample split and a reliability diagram
+        for P10, or strip the model and trade the H4-body condition directly — that is what the
+        coefficients already do, and it would at least be testable.</li>
+      <li><strong>Do not tune on this sample.</strong> Several variants beat the default, but all sit
+        inside the same noise band. Re-tuning here is curve-fitting 380 trades.</li>
+      <li><strong>If traded at all, trade it small and forward.</strong> The measured edge is +0.05 R per
+        trade with no demonstrated stability across halves.</li>
+    </ol>
+  </section>
+
+  <footer class="foot">
+    <span>Independent Python port; not MetaTrader's Strategy Tester. Spread modelled, tick data absent.</span>
+    <span>Risk-normalised: +0.053 R/trade, +20.3 R total, 14.3 R max drawdown, where R = the $15 initial stop.</span>
+  </footer>
+</div>
+
+<script>
+const DATA={"sf":[[1753446000,8.88],[1753463400,12.06],[1753664400,27.92],[1753750800,24.84],[1753783500,24.75],[1753893900,30.52],[1753901100,42.54],[1753912500,52.05],[1754269200,69.83],[1754349000,68.54],[1754391300,65.39],[1754442000,64.04],[1754480400,55.32],[1754531100,54.3],[1754564400,70.94],[1754961300,78.86],[1755185700,84.68],[1755191700,94.73],[1755219900,94.31],[1755566100,94.09],[1755651600,95.01],[1755869400,91.78],[1755903000,89.21],[1756083600,90.06],[1756170900,82.73],[1756199100,80.5],[1756320900,89.95],[1756346700,92.33],[1756395000,98.98],[1756429200,100.55],[1756688400,97.59],[1756720200,104.84],[1756738500,99.81],[1756808400,84.81],[1756826100,94.94],[1756853400,101.8],[1756898700,106.24],[1756947600,96.74],[1757083500,98.03],[1757092200,109.8],[1757093100,94.8],[1757328300,119.6],[1757347500,130.69],[1757382900,125.24],[1757421300,131.32],[1757511900,140.74],[1757678700,125.74],[1757898000,126.64],[1757946900,132.17],[1757984400,131.81],[1758047700,118.17],[1758243600,119.17],[1758318900,104.17],[1758556800,105.05],[1758595800,106.37],[1758645300,106.69],[1758648000,91.69],[1758659400,96.74],[1758792900,102.91],[1758815400,87.91],[1758930000,72.91],[1759123500,82.28],[1759132800,93.34],[1759157100,106.89],[1759227000,91.89],[1759273200,104.51],[1759333200,89.51],[1759445700,100.43],[1759509000,115.55],[1759741500,100.55],[1759749600,110.67],[1759762200,95.67],[1759824300,103.59],[1759847700,105.51],[1759861500,111.33],[1759929000,125.12],[1759936500,130.82],[1759961100,115.82],[1760038200,100.82],[1760084700,114.33],[1760115300,99.33],[1760343000,110.15],[1760369700,115.71],[1760393100,100.71],[1760430300,106.87],[1760430900,91.87],[1760441400,109.79],[1760541600,94.79],[1760548500,113.28],[1760607000,118.41],[1760610900,124.19],[1760646300,131.28],[1760678100,139.0],[1760680500,144.75],[1760682300,158.08],[1760984400,187.34],[1762242300,197.8],[1762265700,192.38],[1762288200,207.38],[1762420800,192.38],[1762437600,198.75],[1762446000,183.75],[1762507200,195.58],[1762540800,218.93],[1762736400,215.2],[1762764000,241.23],[1762782900,247.03],[1762806900,266.4],[1762900800,281.98],[1762939800,290.78],[1762958400,299.37],[1762966800,304.65],[1763030100,328.27],[1763046000,336.13],[1763049900,321.13],[1763384700,335.32],[1763466900,320.32],[1763594400,326.5],[1763969100,331.85],[1764066900,316.85],[1764073200,323.43],[1764095700,329.17],[1764153000,336.8],[1764262500,334.23],[1764313500,319.23],[1764324000,304.23],[1764550800,309.62],[1764551100,294.62],[1764573300,279.62],[1764579900,285.64],[1764711300,290.98],[1764780300,275.98],[1764786000,260.98],[1764787800,245.98],[1764898500,245.05],[1764947100,251.52],[1764973800,236.52],[1765202700,237.05],[1765391400,233.65],[1765454100,240.97],[1765486800,225.97],[1765503300,228.99],[1765544100,235.77],[1765554000,246.63],[1765558800,255.04],[1765870200,240.04],[1765926300,237.04],[1765956300,251.4],[1765992900,257.54],[1766002500,265.04],[1766184300,250.04],[1766387700,259.62],[1766394000,274.63],[1766416200,284.84],[1766474100,269.84],[1766568000,267.21],[1766782800,272.59],[1767045900,257.59],[1767048000,263.79],[1767060900,248.79],[1767168300,255.04],[1767169800,240.04],[1767178800,260.02],[1767394500,245.02],[1767626700,230.02],[1767629700,239.18],[1767661800,248.06],[1767741000,257.53],[1767912000,277.74],[1768208700,277.06],[1768231500,293.7],[1768236000,301.8],[1768301700,308.39],[1768328700,293.39],[1768334100,278.39],[1768525800,285.61],[1768813500,296.78],[1768904400,303.49],[1768910100,312.49],[1768922400,297.49],[1768972500,282.49],[1768974300,289.88],[1768978800,314.35],[1769112900,319.87],[1769116800,329.95],[1769125800,337.98],[1769171400,348.23],[1769406600,333.23],[1769409900,318.23],[1769411400,303.23],[1769500500,317.09],[1769592000,326.9],[1769594400,335.58],[1769605200,320.58],[1769664000,305.58],[1769668800,320.6],[1769671200,305.6],[1769812800,338.35],[1769813700,360.51],[1769814600,382.82],[1770019800,415.0],[1770024900,400.0],[1770026700,385.0],[1770284700,391.71],[1770288600,398.92],[1770289500,416.66],[1770356700,401.66],[1770632400,411.46],[1770982200,419.67],[1770987000,425.21],[1771235100,410.21],[1771251600,416.4],[1771306800,423.4],[1771312800,466.57],[1771317000,451.57],[1771601400,457.31],[1771823400,442.31],[1771830300,427.31],[1771887300,443.75],[1771973400,456.75],[1772209500,464.87],[1772212200,471.2],[1772213100,456.2],[1772439000,464.51],[1772453100,449.51],[1772459100,434.51],[1772572500,447.07],[1772574000,432.07],[1772576400,417.07],[1772745600,422.27],[1772759100,407.27],[1772812800,430.14],[1773029100,415.14],[1773033900,400.14],[1773039900,385.14],[1773187200,370.14],[1773325200,355.14],[1773327300,361.32],[1773328800,346.32],[1773416100,354.95],[1773438900,382.42],[1773619200,399.83],[1773669600,413.11],[1773706500,418.85],[1773851400,435.28],[1773853200,420.28],[1773857400,405.28],[1773921900,390.28],[1773922800,400.77],[1773923400,385.77],[1773992100,398.23],[1774240500,415.3],[1774240800,427.69],[1774241700,441.03],[1774517100,447.37],[1774521900,461.68],[1774522200,446.68],[1774637100,453.92],[1774858500,438.92],[1774881000,444.45],[1774896600,456.73],[1775027700,441.73],[1775031600,449.03],[1775051400,455.88],[1775112600,440.88],[1775166600,451.25],[1775437200,429.01],[1775492460,414.01],[1775627700,399.01],[1775637120,411.32],[1775778060,396.32],[1775782860,402.89],[1778075100,413.34],[1778075700,419.97],[1778078400,404.97],[1778168100,412.26],[1778170200,397.26],[1778541000,406.27],[1778572200,391.27],[1778743800,414.57],[1778832900,431.9],[1778843100,446.4],[1778844000,454.89],[1779086400,439.89],[1779226500,445.52],[1779271500,430.52],[1779284100,415.52],[1779843600,400.52],[1779898200,422.03],[1779899100,427.38],[1779899400,412.38],[1779957000,397.38],[1779963300,382.38],[1779976500,391.39],[1780087800,376.39],[1780095300,361.39],[1780307100,346.39],[1780490100,351.82],[1780505100,373.11],[1780534800,382.66],[1780590900,367.66],[1780625100,376.08],[1780677300,384.32],[1780677600,398.02],[1780683600,405.65],[1780914000,390.65],[1780922100,407.07],[1780927800,392.07],[1781045400,399.37],[1781056620,419.25],[1781080800,404.25],[1781089140,417.5],[1781089500,436.96],[1781155920,455.07],[1781522940,469.96],[1781625840,476.4],[1781732580,483.92],[1781738520,494.03],[1781745960,501.14],[1781773620,486.14],[1781802120,499.39],[1781831400,507.57],[1781860380,492.57],[1781863560,477.57],[1781874540,488.35],[1782133860,473.35],[1782203520,478.84],[1782205860,487.75],[1782212580,507.03],[1782289800,492.03],[1782300300,499.11],[1782305580,506.96],[1782476340,491.96],[1782830700,476.96],[1782911040,461.96],[1782922140,468.0],[1783020600,453.0],[1783036200,454.74],[1783069440,439.74],[1783073520,445.36],[1783078800,450.62],[1783443420,435.62],[1783446120,420.62],[1783448280,405.62],[1783514760,412.49],[1783521840,397.49],[1783525560,382.49],[1783596180,367.49],[1783923240,379.7],[1783990800,369.52],[1784114280,375.22],[1784152920,380.29],[1784155320,388.26],[1784219040,373.26],[1784220000,379.31],[1784226240,364.31],[1784295900,363.86],[1784311440,348.86],[1784327460,357.2],[1784648580,342.2],[1784714220,327.2],[1784730000,328.98],[1784760780,313.98],[1784788920,322.91],[1784885160,307.91],[1784899080,292.91],[1785243720,315.76],[1785259440,327.77],[1785278040,337.89],[1785354840,322.89],[1785409920,307.89],[1785459600,301.35],[1785745440,309.69],[1785874080,327.32],[1785895320,312.32],[1785919680,342.95],[1785923040,348.93],[1785930420,333.93],[1785995280,318.93],[1786032300,303.93]],"tf":[[1753442700,6.42],[1753463400,9.6],[1753664400,25.46],[1753750800,22.38],[1753783500,22.29],[1753893900,28.06],[1753899600,38.24],[1753912200,47.75],[1754087400,52.98],[1754349000,51.69],[1754391300,48.54],[1754442000,47.19],[1754480400,38.47],[1754531100,37.45],[1754564400,54.09],[1754961300,62.01],[1755185400,67.83],[1755191100,77.88],[1755219900,77.46],[1755566100,77.24],[1755651600,78.16],[1755869400,74.93],[1755903000,72.36],[1756083600,73.21],[1756170900,65.88],[1756199100,63.65],[1756320900,73.1],[1756346700,75.48],[1756395000,82.13],[1756429200,83.7],[1756688400,80.74],[1756720200,87.99],[1756738500,82.96],[1756808400,67.96],[1756826100,78.09],[1756853400,84.95],[1756898700,89.39],[1756947600,79.89],[1757083500,81.18],[1757090700,88.31],[1757093700,73.31],[1757328300,98.11],[1757347200,109.2],[1757382900,103.75],[1757421300,109.83],[1757511900,119.25],[1757678700,104.25],[1757898000,105.15],[1757946900,110.68],[1757984400,110.32],[1758047700,96.68],[1758243600,97.68],[1758318900,82.68],[1758556800,83.56],[1758595800,84.88],[1758645300,85.2],[1758648000,70.2],[1758659400,75.25],[1758792900,81.42],[1758815400,66.42],[1758930000,51.42],[1759123200,60.79],[1759132800,71.85],[1759155300,79.65],[1759227000,64.65],[1759272600,76.2],[1759333200,61.2],[1759442400,69.91],[1759506900,75.56],[1759741500,60.56],[1759749600,70.68],[1759762200,55.68],[1759824300,63.6],[1759847700,65.52],[1759861500,71.34],[1759927500,79.26],[1759935900,84.96],[1759961100,69.96],[1760038200,54.96],[1760084700,68.47],[1760115300,53.47],[1760342400,60.1],[1760369700,65.66],[1760393100,50.66],[1760430300,56.82],[1760430900,41.82],[1760440200,56.19],[1760541600,41.19],[1760547600,52.53],[1760606400,57.66],[1760610900,63.44],[1760646300,70.53],[1760677800,78.25],[1760680200,84.0],[1760681400,91.76],[1760982300,98.67],[1762241400,106.34],[1762265700,100.92],[1762285800,106.44],[1762420800,91.44],[1762437600,97.81],[1762446000,82.81],[1762507200,94.64],[1762540200,108.66],[1762736400,104.93],[1762759800,113.27],[1762764000,126.89],[1762782900,132.69],[1762900800,148.27],[1762939800,157.07],[1762958400,165.66],[1762966200,170.94],[1763028000,181.66],[1763045700,189.52],[1763049900,174.52],[1763383800,181.4],[1763466900,166.4],[1763594100,172.58],[1763968800,177.93],[1764066900,162.93],[1764073200,169.51],[1764095100,175.25],[1764151500,181.4],[1764262500,178.83],[1764313500,163.83],[1764324000,148.83],[1764550800,154.22],[1764551100,139.22],[1764573300,124.22],[1764578700,130.24],[1764711300,135.58],[1764780300,120.58],[1764786000,105.58],[1764787800,90.58],[1764898500,89.65],[1764946800,96.12],[1764973800,81.12],[1765202700,81.65],[1765391400,78.25],[1765454100,85.57],[1765486800,70.57],[1765503300,73.59],[1765544100,80.37],[1765553400,91.23],[1765558500,97.84],[1765870200,82.84],[1765926300,79.84],[1765956000,94.2],[1765992600,100.34],[1766002500,107.84],[1766184300,92.84],[1766387400,102.42],[1766393100,110.09],[1766415900,115.76],[1766474100,100.76],[1766568000,98.13],[1766782800,103.51],[1767045900,88.51],[1767047700,94.71],[1767056700,79.71],[1767168000,85.96],[1767169800,70.96],[1767177600,77.27],[1767394500,62.27],[1767626700,47.27],[1767629400,56.43],[1767661200,62.23],[1767740100,71.7],[1767910800,79.56],[1767911400,87.06],[1768208700,86.38],[1768230300,96.74],[1768235700,104.84],[1768301700,111.43],[1768328700,96.43],[1768334100,81.43],[1768525800,88.65],[1768813500,99.82],[1768903500,106.53],[1768910100,114.07],[1768922400,99.07],[1768972500,84.07],[1768974000,91.46],[1768976400,97.4],[1769112600,102.92],[1769115600,110.07],[1769125800,118.1],[1769171100,128.35],[1769406600,113.35],[1769409900,98.35],[1769411400,83.35],[1769499900,94.29],[1769591700,104.1],[1769593800,111.42],[1769605200,96.42],[1769664000,81.42],[1769668200,94.71],[1769671200,79.71],[1769812500,112.46],[1769813400,134.62],[1769814300,156.93],[1770019500,189.11],[1770024900,174.11],[1770026700,159.11],[1770284400,165.82],[1770288300,173.03],[1770289200,190.77],[1770356700,175.77],[1770632100,185.57],[1770981900,193.78],[1770986700,199.32],[1771235100,184.32],[1771251300,190.51],[1771306800,197.51],[1771312200,209.45],[1771317000,194.45],[1771601400,200.19],[1771823400,185.19],[1771830300,170.19],[1771887000,186.63],[1771971600,192.41],[1772209200,200.53],[1772211900,206.86],[1772213100,191.86],[1772438700,200.17],[1772453100,185.17],[1772459100,170.17],[1772572200,182.73],[1772574000,167.73],[1772576400,152.73],[1772745300,157.93],[1772759100,142.93],[1772812500,165.8],[1773029100,150.8],[1773033900,135.8],[1773039900,120.8],[1773187200,105.8],[1773325200,90.8],[1773327300,96.98],[1773328800,81.98],[1773415800,90.61],[1773437400,96.18],[1773438300,103.2],[1773669000,112.99],[1773706200,118.73],[1773850800,130.7],[1773853200,115.7],[1773857400,100.7],[1773921900,85.7],[1773922500,96.19],[1773923400,81.19],[1773991800,93.65],[1774240200,110.72],[1774240500,123.11],[1774241400,136.45],[1774516800,142.79],[1774521600,157.1],[1774522200,142.1],[1774636800,149.34],[1774858500,134.34],[1774880700,139.87],[1774895700,145.36],[1775027700,130.36],[1775031300,137.66],[1775051400,144.51],[1775112600,129.51],[1775166300,139.88],[1775437200,117.64],[1775492460,102.64],[1775627700,87.64],[1775637120,99.95],[1775778060,84.95],[1775782800,91.52],[1778074200,98.0],[1778075400,105.82],[1778077500,90.82],[1778167800,98.11],[1778170200,83.11],[1778541000,92.12],[1778572200,77.12],[1778743200,85.45],[1778832000,92.36],[1778842800,106.86],[1778844600,112.45],[1779086400,97.45],[1779226200,103.08],[1779229200,109.0],[1779271500,94.0],[1779284100,79.0],[1779843600,64.0],[1779897900,85.51],[1779898800,90.86],[1779899400,75.86],[1779957000,60.86],[1779963300,45.86],[1779976200,54.87],[1780087800,39.87],[1780095300,24.87],[1780307100,9.87],[1780489500,15.3],[1780504800,36.59],[1780529400,43.29],[1780590900,28.29],[1780624800,36.71],[1780677000,44.95],[1780677300,58.65],[1780683300,66.28],[1780914000,51.28],[1780921500,61.25],[1780927800,46.25],[1781045400,53.55],[1781056020,66.38],[1781080800,51.38],[1781088720,64.63],[1781089380,75.39],[1781155860,93.5],[1781522940,108.39],[1781625840,114.83],[1781732520,122.35],[1781738280,127.86],[1781745960,134.97],[1781773620,119.97],[1781802000,125.71],[1781830980,133.89],[1781860380,118.89],[1781863560,103.89],[1781874540,114.67],[1782133860,99.67],[1782203400,105.16],[1782205740,112.09],[1782212520,128.38],[1782289800,113.38],[1782300300,120.46],[1782305580,128.31],[1782476340,113.31],[1782830700,98.31],[1782911040,83.31],[1782922140,89.35],[1783020600,74.35],[1783036200,76.09],[1783069440,61.09],[1783073520,66.71],[1783078800,71.97],[1783443420,56.97],[1783446120,41.97],[1783448280,26.97],[1783514580,33.84],[1783521840,18.84],[1783525560,3.84],[1783596180,-11.16],[1783923060,-0.11],[1783990800,-10.29],[1784114280,-4.59],[1784152920,0.48],[1784155320,8.45],[1784219040,-6.55],[1784219940,-0.5],[1784226240,-15.5],[1784295900,-15.95],[1784311440,-30.95],[1784327460,-22.61],[1784648580,-37.61],[1784714220,-52.61],[1784730000,-50.83],[1784760780,-65.83],[1784788920,-56.9],[1784885160,-71.9],[1784899080,-86.9],[1785242100,-73.45],[1785259260,-63.21],[1785278040,-53.09],[1785354840,-68.09],[1785409920,-83.09],[1785459600,-89.63],[1785745440,-81.29],[1785874080,-63.66],[1785895320,-78.66],[1785918900,-71.39],[1785919620,-62.41],[1785921420,-55.27],[1785995280,-70.27],[1786032300,-85.27]],"monthly":[["2025-07",52.05,8],["2025-08",48.5,22],["2025-09",3.96,36],["2025-10",82.83,30],["2025-11",116.89,30],["2025-12",-44.21,37],["2026-01",122.8,37],["2026-02",73.38,23],["2026-03",0.53,38],["2026-04",-53.84,11],["2026-05",-41.5,24],["2026-06",115.57,38],["2026-07",-175.61,38],["2026-08",2.58,8]],"q":{"p10":[["Q1",95,1.022],["Q2",95,0.105],["Q3",95,2.866],["Q4",95,-0.794]],"p30":[["Q1",95,0.221],["Q2",95,1.785],["Q3",95,1.699],["Q4",95,-0.506]],"h4body":[["Q1",95,1.108],["Q2",95,1.685],["Q3",97,0.524],["Q4",93,-0.131]]}};
+(function(){
+  const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  const fmt = v => (v<0?"−$":"+$") + Math.abs(v).toFixed(2);
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (n,a) => { const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); return e; };
+
+  function frame(host, W, H, pad){
+    host.querySelectorAll("svg").forEach(s=>s.remove());
+    const svg = el("svg",{viewBox:`0 0 ${W} ${H}`, role:"img"});
+    host.appendChild(svg); return svg;
+  }
+
+  /* ---------- 1. equity curves ---------- */
+  function equity(){
+    const host=document.getElementById("p-eq"), tip=document.getElementById("t-eq");
+    const W=760,H=330,L=58,R=64,T=14,B=34;
+    const svg=frame(host,W,H);
+    const all=DATA.sf.concat(DATA.tf);
+    const xs=all.map(p=>p[0]), ys=all.map(p=>p[1]);
+    const x0=Math.min(...xs), x1=Math.max(...xs);
+    let y0=Math.min(...ys), y1=Math.max(...ys);
+    const padY=(y1-y0)*0.12; y0-=padY; y1+=padY;
+    const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+
+    const ticks=[]; const step=100;
+    for(let v=Math.ceil(y0/step)*step; v<=y1; v+=step) ticks.push(v);
+    ticks.forEach(v=>{
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),stroke:css("--grid"),"stroke-width":1}));
+      const t=el("text",{x:L-10,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")}); t.textContent=(v>0?"+":"")+v; svg.appendChild(t);
+    });
+    svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(0),y2:Y(0),stroke:css("--line"),"stroke-width":1.5}));
+
+    const months=[];
+    let cur="";
+    DATA.sf.forEach(p=>{ const d=new Date(p[0]*1000); const k=d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0");
+      if(k!==cur && d.getUTCMonth()%3===0){ months.push([p[0],k]); cur=k; } else if(k!==cur) cur=k; });
+    months.forEach(([tt,k])=>{
+      const t=el("text",{x:X(tt),y:H-12,"text-anchor":"middle",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")}); t.textContent=k; svg.appendChild(t);
+    });
+
+    const path=pts=>pts.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
+    [["tf","--s2"],["sf","--s1"]].forEach(([k,c])=>{
+      svg.appendChild(el("path",{d:path(DATA[k]),fill:"none",stroke:css(c),
+        "stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));
+    });
+    [["sf","--s1"],["tf","--s2"]].forEach(([k,c])=>{
+      const last=DATA[k][DATA[k].length-1];
+      svg.appendChild(el("circle",{cx:X(last[0]),cy:Y(last[1]),r:4,fill:css(c),
+        stroke:css("--surface"),"stroke-width":2}));
+      const t=el("text",{x:X(last[0])+9,y:Y(last[1])+4,fill:css(c),"font-size":12,
+        "font-weight":600,"font-family":css("--mono")});
+      t.textContent=(last[1]>0?"+$":"−$")+Math.abs(last[1]).toFixed(0); svg.appendChild(t);
+    });
+
+    const cross=el("line",{y1:T,y2:H-B,stroke:css("--ink-3"),"stroke-width":1,
+      "stroke-dasharray":"3 3",opacity:0}); svg.appendChild(cross);
+    const dots=[el("circle",{r:4,fill:css("--s1"),stroke:css("--surface"),"stroke-width":2,opacity:0}),
+                el("circle",{r:4,fill:css("--s2"),stroke:css("--surface"),"stroke-width":2,opacity:0})];
+    dots.forEach(d=>svg.appendChild(d));
+    const near=(arr,t)=>{ let lo=0,hi=arr.length-1; while(lo<hi){const m=(lo+hi)>>1; if(arr[m][0]<t) lo=m+1; else hi=m;} return arr[Math.max(0,Math.min(arr.length-1,lo))]; };
+    const hit=el("rect",{x:L,y:T,width:W-L-R,height:H-T-B,fill:"transparent"}); svg.appendChild(hit);
+    function move(ev){
+      const r=host.getBoundingClientRect();
+      const cx=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
+      const vx=cx/r.width*W;
+      if(vx<L||vx>W-R){ leave(); return; }
+      const t=x0+(vx-L)/(W-L-R)*(x1-x0);
+      const a=near(DATA.sf,t), b=near(DATA.tf,t);
+      cross.setAttribute("x1",X(a[0])); cross.setAttribute("x2",X(a[0])); cross.setAttribute("opacity",1);
+      dots[0].setAttribute("cx",X(a[0])); dots[0].setAttribute("cy",Y(a[1])); dots[0].setAttribute("opacity",1);
+      dots[1].setAttribute("cx",X(b[0])); dots[1].setAttribute("cy",Y(b[1])); dots[1].setAttribute("opacity",1);
+      const d=new Date(a[0]*1000).toISOString().slice(0,10);
+      tip.innerHTML=`<span class="k">${d}</span><br>stop-first &nbsp;<b>${fmt(a[1])}</b><br>trail-first &nbsp;<b>${fmt(b[1])}</b>`;
+      tip.style.opacity=1;
+      const px=X(a[0])/W*r.width;
+      tip.style.left=Math.min(Math.max(px+12,4),r.width-150)+"px";
+      tip.style.top="12px";
+    }
+    function leave(){ tip.style.opacity=0; cross.setAttribute("opacity",0); dots.forEach(d=>d.setAttribute("opacity",0)); }
+    host.addEventListener("mousemove",move); host.addEventListener("mouseleave",leave);
+    host.addEventListener("touchmove",move,{passive:true}); host.addEventListener("touchend",leave);
+
+    const tb=document.querySelector("#tbl-eq tbody"); tb.innerHTML="";
+    let mi=0;
+    DATA.monthly.forEach(m=>{
+      const target=m[0];
+      const f=DATA.sf.filter(p=>new Date(p[0]*1000).toISOString().slice(0,7)<=target);
+      const g=DATA.tf.filter(p=>new Date(p[0]*1000).toISOString().slice(0,7)<=target);
+      if(!f.length||!g.length) return;
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td>${target}</td><td class="num">${fmt(f[f.length-1][1])}</td><td class="num">${fmt(g[g.length-1][1])}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+
+  /* ---------- 2. monthly bars ---------- */
+  function monthly(){
+    const host=document.getElementById("p-mth"), tip=document.getElementById("t-mth");
+    const d=DATA.monthly, W=760,H=250,L=54,R=16,T=14,B=42;
+    const svg=frame(host,W,H);
+    const vals=d.map(m=>m[1]);
+    let y1=Math.max(...vals,0), y0=Math.min(...vals,0);
+    const pad=(y1-y0)*0.14; y1+=pad; y0-=pad;
+    const Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    const bw=(W-L-R)/d.length, gap=Math.min(9,bw*0.3);
+    [-150,-100,-50,0,50,100,150].filter(v=>v>=y0&&v<=y1).forEach(v=>{
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-10,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")}); t.textContent=(v>0?"+":"")+v; svg.appendChild(t);
+    });
+    d.forEach((m,i)=>{
+      const v=m[1], x=L+i*bw+gap/2, w=bw-gap;
+      const top=Math.min(Y(v),Y(0)), h=Math.max(1.5,Math.abs(Y(v)-Y(0)));
+      const r=el("rect",{x:x.toFixed(1),y:top.toFixed(1),width:w.toFixed(1),height:h.toFixed(1),
+        rx:3,fill:css(v>=0?"--pos":"--neg")});
+      r.style.cursor="crosshair";
+      r.addEventListener("mouseenter",()=>{
+        tip.innerHTML=`<span class="k">${m[0]}</span><br>net <b>${fmt(v)}</b><br><span class="k">${m[2]} trades</span>`;
+        tip.style.opacity=1;
+        const rc=host.getBoundingClientRect();
+        tip.style.left=Math.min(Math.max((x+w/2)/W*rc.width-58,4),rc.width-120)+"px";
+        tip.style.top=(v>=0?Y(v)/H*rc.height-64:Y(v)/H*rc.height+10)+"px";
+      });
+      r.addEventListener("mouseleave",()=>tip.style.opacity=0);
+      svg.appendChild(r);
+      if(i%2===0){
+        const t=el("text",{x:(x+w/2).toFixed(1),y:H-14,"text-anchor":"middle",fill:css("--ink-3"),
+          "font-size":10,"font-family":css("--mono")}); t.textContent=m[0].slice(2); svg.appendChild(t);
+      }
+    });
+  }
+
+  /* ---------- 3. p10 quartile expectancy ---------- */
+  function quart(){
+    const host=document.getElementById("p-q"), tip=document.getElementById("t-q");
+    const d=DATA.q.p10, W=760,H=210,L=54,R=16,T=16,B=40;
+    const svg=frame(host,W,H);
+    const vals=d.map(q=>q[2]);
+    let y1=Math.max(...vals,0)*1.25, y0=Math.min(...vals,0)*1.6;
+    const Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    const bw=(W-L-R)/d.length, gap=Math.min(46,bw*0.42);
+    [-1,0,1,2,3].filter(v=>v>=y0&&v<=y1).forEach(v=>{
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-10,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")}); t.textContent=(v>0?"+$":v<0?"−$":"$")+Math.abs(v); svg.appendChild(t);
+    });
+    const labels=["Q1 lowest p10","Q2","Q3","Q4 highest p10"];
+    d.forEach((q,i)=>{
+      const v=q[2], x=L+i*bw+gap/2, w=bw-gap;
+      const top=Math.min(Y(v),Y(0)), h=Math.max(1.5,Math.abs(Y(v)-Y(0)));
+      const r=el("rect",{x:x.toFixed(1),y:top.toFixed(1),width:w.toFixed(1),height:h.toFixed(1),
+        rx:3,fill:css(v>=0?"--pos":"--neg")});
+      r.style.cursor="crosshair";
+      r.addEventListener("mouseenter",()=>{
+        tip.innerHTML=`<span class="k">${labels[i]}</span><br>expectancy <b>${fmt(v)}</b><br><span class="k">${q[1]} trades</span>`;
+        tip.style.opacity=1;
+        const rc=host.getBoundingClientRect();
+        tip.style.left=Math.min(Math.max((x+w/2)/W*rc.width-64,4),rc.width-140)+"px";
+        tip.style.top=(v>=0?Y(v)/H*rc.height-66:Y(v)/H*rc.height+10)+"px";
+      });
+      r.addEventListener("mouseleave",()=>tip.style.opacity=0);
+      svg.appendChild(r);
+      const lt=el("text",{x:(x+w/2).toFixed(1),y:H-14,"text-anchor":"middle",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")}); lt.textContent=labels[i]; svg.appendChild(lt);
+      const vt=el("text",{x:(x+w/2).toFixed(1),y:(v>=0?top-8:top+h+16).toFixed(1),"text-anchor":"middle",
+        fill:css("--ink"),"font-size":12,"font-weight":600,"font-family":css("--mono")});
+      vt.textContent=fmt(v); svg.appendChild(vt);
+    });
+  }
+
+  function draw(){ equity(); monthly(); quart(); }
+  draw();
+  let rt; addEventListener("resize",()=>{clearTimeout(rt); rt=setTimeout(draw,150);});
+  matchMedia("(prefers-color-scheme:dark)").addEventListener("change",draw);
+  new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+})();
+</script>
