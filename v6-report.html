@@ -1,0 +1,489 @@
+<title>XVISION Gold Velocity AI EA V6 — Audit and Backtest</title>
+<style>
+  :root{
+    --ground:#EDF0F4; --surface:#FAFBFD; --raised:#FFFFFF;
+    --line:#D5DBE3; --line-soft:#E4E9EF; --grid:#E7ECF1;
+    --ink:#0B111A; --ink-2:#43566B; --ink-3:#6B7D91;
+    --gold:#8A6A0F; --steel:#2C5B85;
+    --sev-block:#A8261C; --sev-block-bg:#F7E4E2;
+    --sev-med:#B4530C;   --sev-med-bg:#FAEADD;
+    --sev-good:#1F6B3F;  --sev-good-bg:#E0EFE6;
+    --s1:#2a78d6; --s2:#eb6834; --pos:#2a78d6; --neg:#e34948;
+    --shadow:0 1px 2px rgba(11,17,26,.05), 0 6px 20px -12px rgba(11,17,26,.22);
+    --serif:ui-serif,Charter,"Bitstream Charter","Source Serif 4",Cambria,Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0A1019; --surface:#101A28; --raised:#182436;
+      --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+      --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+      --gold:#D9AE47; --steel:#7FB2E0;
+      --sev-block:#E8695E; --sev-block-bg:#2E1714;
+      --sev-med:#E0913F;   --sev-med-bg:#2B1E10;
+      --sev-good:#5FBE85;  --sev-good-bg:#12261B;
+      --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A1019; --surface:#101A28; --raised:#182436;
+    --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+    --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+    --gold:#D9AE47; --steel:#7FB2E0;
+    --sev-block:#E8695E; --sev-block-bg:#2E1714;
+    --sev-med:#E0913F;   --sev-med-bg:#2B1E10;
+    --sev-good:#5FBE85;  --sev-good-bg:#12261B;
+    --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground); color:var(--ink); font-family:var(--serif);
+    font-size:17px; line-height:1.62; -webkit-font-smoothing:antialiased; margin:0; padding:0 20px 96px}
+  .wrap{max-width:74ch; margin:0 auto}
+  p{margin:0 0 .9em} p:last-child{margin-bottom:0}
+  a{color:var(--steel)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--gold); outline-offset:3px}
+  code{font-family:var(--mono); font-size:.845em; background:var(--line-soft);
+    padding:.1em .34em; border-radius:3px; word-break:break-word}
+  .mast{padding:64px 0 0; display:flex; flex-direction:column; gap:18px}
+  .file{font-family:var(--mono); font-size:.76rem; letter-spacing:.06em; color:var(--ink-3)}
+  .mast h1{font-size:clamp(2rem,5.6vw,3rem); line-height:1.08; margin:0; font-weight:600;
+    letter-spacing:-.018em; text-wrap:balance}
+  .mast h1 .x{color:var(--gold)}
+  .rule{height:2px; border:0; margin:0;
+    background:linear-gradient(90deg,var(--gold) 0%,var(--gold) 22%,var(--line) 22%,var(--line) 100%)}
+  .meta{display:flex; flex-wrap:wrap; gap:6px 26px; font-family:var(--mono);
+    font-size:.75rem; color:var(--ink-3)} .meta b{color:var(--ink-2); font-weight:500}
+  section{padding-top:52px; display:flex; flex-direction:column; gap:16px}
+  h2{font-size:1.55rem; line-height:1.2; margin:0; font-weight:600; letter-spacing:-.012em; text-wrap:balance}
+  h3{font-size:1.05rem; margin:0; font-weight:700; text-wrap:balance}
+  .eyebrow{font-family:var(--mono); font-size:.7rem; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--ink-3); margin:0}
+  .verdict{background:var(--raised); border:1px solid var(--line); border-radius:4px;
+    padding:26px 28px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:12px}
+  .verdict .lede{font-size:1.12rem; line-height:1.55}
+  .ask{font-family:var(--mono); font-size:.8rem; color:var(--sev-med); background:var(--sev-med-bg);
+    border-left:3px solid var(--sev-med); padding:11px 14px; border-radius:0 3px 3px 0; line-height:1.55}
+  .win{background:var(--sev-good-bg); border-left:3px solid var(--sev-good);
+    padding:14px 18px; border-radius:0 3px 3px 0; font-size:.96rem; color:var(--ink-2)}
+  .win b{color:var(--ink)}
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px}
+  .tile{background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--tc);
+    border-radius:3px; padding:14px 16px; display:flex; flex-direction:column; gap:2px}
+  .tile .n{font-family:var(--mono); font-size:1.55rem; font-weight:600; line-height:1.15;
+    color:var(--tc); font-variant-numeric:tabular-nums}
+  .tile .l{font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--ink-3)}
+  .tile .s{font-size:.82rem; color:var(--ink-2); line-height:1.35; margin-top:3px}
+  .t-a{--tc:var(--s1)} .t-b{--tc:var(--sev-good)} .t-c{--tc:var(--sev-med)} .t-d{--tc:var(--ink-3)}
+  figure{margin:0; background:var(--surface); border:1px solid var(--line); border-radius:4px;
+    padding:18px 18px 12px; display:flex; flex-direction:column; gap:10px}
+  figcaption{font-size:.9rem; color:var(--ink-2); line-height:1.5}
+  figcaption b{color:var(--ink); font-weight:600}
+  .chart-hd{display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px}
+  .chart-hd h3{font-size:.97rem}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; font-family:var(--mono); font-size:.71rem; color:var(--ink-2)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .swatch{width:14px; height:3px; border-radius:2px; display:inline-block}
+  .plot{position:relative; width:100%} .plot svg{display:block; width:100%; height:auto; overflow:visible}
+  .tip{position:absolute; pointer-events:none; opacity:0; transition:opacity .1s; background:var(--raised);
+    border:1px solid var(--line); border-radius:3px; box-shadow:var(--shadow); padding:7px 10px;
+    font-family:var(--mono); font-size:.7rem; line-height:1.5; color:var(--ink); white-space:nowrap;
+    z-index:5; font-variant-numeric:tabular-nums}
+  .tip .k{color:var(--ink-3)}
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-family:var(--mono); font-size:.775rem;
+    font-variant-numeric:tabular-nums; line-height:1.5}
+  th,td{text-align:left; padding:8px 14px; border-bottom:1px solid var(--line-soft); white-space:nowrap}
+  thead th{font-size:.67rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+    font-weight:500; background:var(--raised); border-bottom:1px solid var(--line)}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  tr.hi td{background:var(--sev-good-bg)} tr.hi td:first-child{font-weight:700; color:var(--ink)}
+  tr.lo td{background:var(--sev-med-bg)}
+  .no{color:var(--ink-3)} .up{color:var(--sev-good)} .dn{color:var(--sev-block)}
+  .fixed{color:var(--sev-good); font-weight:600}
+  ul,ol{margin:0; padding-left:1.2em; display:flex; flex-direction:column; gap:9px}
+  ol li::marker{font-family:var(--mono); font-size:.85em; color:var(--ink-3)}
+  .find{background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--fc);
+    border-radius:0 4px 4px 0; padding:18px 22px; display:flex; flex-direction:column; gap:10px}
+  .f-med{--fc:var(--sev-med)} .f-low{--fc:var(--ink-3)}
+  .find .hd{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
+  .tag{font-family:var(--mono); font-size:.71rem; font-weight:600; color:var(--fc);
+    background:var(--raised); border:1px solid var(--line); padding:2px 7px; border-radius:3px; flex:none}
+  .find h3{flex:1 1 16ch}
+  pre{margin:0; background:var(--raised); border:1px solid var(--line); border-radius:3px;
+    padding:13px 15px; overflow-x:auto; font-family:var(--mono); font-size:.775rem;
+    line-height:1.6; color:var(--ink-2)}
+  .note{border-left:2px solid var(--line); padding-left:16px; color:var(--ink-2); font-size:.95rem}
+  .foot{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); font-family:var(--mono);
+    font-size:.72rem; color:var(--ink-3); display:flex; flex-direction:column; gap:6px}
+  @media (max-width:560px){ body{font-size:16px; padding:0 14px 72px} .mast{padding-top:44px}
+    .verdict{padding:18px} figure{padding:14px 12px 10px} .find{padding:16px} }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="file">XVISION_Gold_Velocity_AI_EA_V6.mq4 · 1664 lines · closed H1 → M5 → M1</div>
+    <h1><span class="x">XVISION</span> V6 — audit and backtest</h1>
+    <hr class="rule">
+    <div class="meta">
+      <span><b>Date</b> 2026-08-08</span>
+      <span><b>Build</b> not compiled</span>
+      <span><b>Testable M1</b> 47 trading days</span>
+      <span><b>Model</b> none — deterministic</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="verdict">
+      <p class="eyebrow">Verdict</p>
+      <p class="lede">V6 is a different system and a materially better one. <strong>Every blocking
+        finding from the V4 audit is fixed, and fixed correctly.</strong> The logistic model is gone,
+        replaced by a deterministic three-timeframe threshold stack. The result is consistent with a
+        small real edge — and not yet established as one.</p>
+      <p class="win"><b>The structural win:</b> dropping the trailing stop collapsed the
+        intrabar-ordering ambiguity that made V4 unmeasurable. Both orderings now give <b>exactly the
+        same number</b>. V4's ±$390 bracket, the thing that left its sign undetermined, does not exist
+        in V6.</p>
+      <p class="ask">One question I can't answer and you can: <strong>what data were the 17 thresholds
+        chosen on?</strong> If they were tuned on this gold history, everything below is in-sample. If
+        they were set a priori, the out-of-window agreement in §4 is real evidence. This changes the
+        interpretation more than any further computation would.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Two samples, two readings</p>
+    <div class="tiles">
+      <div class="tile t-a"><span class="n">1.84</span><span class="l">PF · full stack</span>
+        <span class="s">101 trades, 47 days · t = 2.24</span></div>
+      <div class="tile t-c"><span class="n">1.22</span><span class="l">PF · H1+M5 core</span>
+        <span class="s">560 trades, 12.4 mo · t = 1.55</span></div>
+      <div class="tile t-b"><span class="n">±$0</span><span class="l">Intrabar bracket</span>
+        <span class="s">Was ±$390 in V4</span></div>
+      <div class="tile t-d"><span class="n">10/10</span><span class="l">V4 findings fixed</span>
+        <span class="s">4 blocking, 6 medium/low</span></div>
+    </div>
+    <p class="note"><strong>The larger sample is the more trustworthy number.</strong> PF 1.22 at
+      +0.06 R per trade — the same order of edge V4 showed, but this time without a sign ambiguity,
+      without a split-half collapse, and with out-of-window agreement.</p>
+  </section>
+
+  <section>
+    <h2>The binding constraint: very little testable data</h2>
+    <p>V6 requires closed <strong>M1</strong> bars, and the supplied M1 file has a
+      <strong>56-day hole</strong> (2026-04-14 → 2026-06-09). Real coverage is 2026-04-06 → 04-14 plus
+      06-09 → 08-07: <strong>67 calendar days, 47 trading days, 101 trades.</strong> V4 was tested on
+      12.4 months and 380 trades. This is one-fifth the evidence.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Baseline — V6 shipped defaults</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Win</th><th class="num">Max DD</th></tr></thead>
+      <tbody>
+        <tr><td>Stop checked before trail</td><td class="num">101</td><td class="num up">+$446.27</td><td class="num">1.842</td><td class="num">58.4%</td><td class="num">$78.10</td></tr>
+        <tr><td>Trail advanced before stop</td><td class="num">101</td><td class="num up">+$446.27</td><td class="num">1.842</td><td class="num">58.4%</td><td class="num">$78.10</td></tr>
+      </tbody>
+    </table></div>
+    <p>t = 2.241, bootstrap 95% CI <strong>[+$66, +$842]</strong>, P(net ≤ 0) = 0.9%. Exits: 90 time
+      stop, 11 stop loss. Random-direction control over 200 runs puts the real result at the
+      <strong>100th percentile</strong> (control mean +$21, sd $178). Gross edge is
+      <strong>$4.68 per trade</strong> against V4's $1.10 — four times the margin over the same costs,
+      and results hold from $0.00 to $0.80 of spread.</p>
+  </section>
+
+  <section>
+    <h2>One shipped default looks fitted</h2>
+    <figure>
+      <div class="chart-hd">
+        <h3>Net P/L across the hold-time sweep, each series indexed to its own best</h3>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--s1)"></i>101 trades · 47 days</span>
+          <span><i class="swatch" style="background:var(--s2)"></i>560 trades · 12.4 months</span>
+        </div>
+      </div>
+      <div class="plot" id="p-hold"><div class="tip" id="t-hold"></div></div>
+      <figcaption>Indexed because the two samples differ in size, not to hide scale — the question is
+        <em>where each curve peaks</em>. On the short window the peak sits exactly on the shipped
+        <code>MaximumHoldingMinutes = 120</code>. On 12.4 months it moves to <b>150</b>, which is 42%
+        better there. <b>The 120 peak does not reproduce out of window</b> — treat it as a fitted
+        parameter, not a discovered horizon.</figcaption>
+    </figure>
+    <p>The stop loss looks different, and better. Its sweep is a <strong>broad plateau</strong> rather
+      than a spike — anything from 25 to 50 works, and it breaks down only below 20:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>InitialStopLossMovement</th><th class="num">10</th><th class="num">15</th><th class="num">20</th><th class="num">25</th><th class="num">30</th><th class="num">35</th><th class="num">40</th><th class="num">50</th></tr></thead>
+      <tbody><tr><td>Net</td><td class="num">$115</td><td class="num">$111</td><td class="num">$298</td><td class="num up">$446</td><td class="num up">$461</td><td class="num">$436</td><td class="num">$416</td><td class="num">$433</td></tr></tbody>
+    </table></div>
+    <p>A plateau with a cliff on one side is what a real effect looks like: the strategy needs room for
+      a two-hour hold, and V4's $15 was simply too tight. That default I would trust.</p>
+  </section>
+
+  <section>
+    <h2>The out-of-window test</h2>
+    <p>The M1 trigger can only be evaluated where M1 data exists — but the <strong>H1 regime gate and
+      M5 setup</strong> need only M5 and H1, which cover the full 12.4 months. Running that reduced
+      form gives a sample 5.5× larger, covering nine months the M1 file never saw.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Window</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Win</th></tr></thead>
+      <tbody>
+        <tr><td>Full 12.4 months</td><td class="num">560</td><td class="num">+$801.70</td><td class="num">1.219</td><td class="num">47.5%</td></tr>
+        <tr class="hi"><td>Outside the M1 window</td><td class="num">396</td><td class="num">+$548.77</td><td class="num">1.216</td><td class="num">46.2%</td></tr>
+        <tr class="hi"><td>Inside the M1 window</td><td class="num">164</td><td class="num">+$252.93</td><td class="num">1.226</td><td class="num">50.6%</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Profit factor agrees to within 0.01 across windows that share no data.</strong> That is
+      the strongest single result in this report, and the thing V4 never produced.</p>
+    <figure>
+      <div class="chart-hd"><h3>H1 gate + M5 setup — cumulative P/L, 560 trades</h3></div>
+      <div class="plot" id="p-eq"><div class="tip" id="t-eq"></div></div>
+      <figcaption>The shaded band is the M1 window. Everything to its left is a period the M1-based
+        defaults could not have been tuned on, and the slope through it is the same.
+        <b>10 of 14 months positive</b>; worst −$204, best +$261.</figcaption>
+    </figure>
+    <p>The honest counterweight: on this larger sample the significance is <em>weaker</em>, not
+      stronger — t = <strong>1.545</strong>, 95% CI <strong>[−$191, +$1,848]</strong>, P(net ≤ 0) =
+      5.9%, random-control 95th percentile. Two samples, two readings: 101 trades at PF 1.84, or 560
+      trades at PF 1.22. Prefer the second.</p>
+    <p>Split-half on the 101 trades is also consistent, which V4's never was — first half +$277.49
+      (PF 1.850), second half +$168.78 (PF 1.829).</p>
+  </section>
+
+  <section>
+    <h2>Does the confidence score rank outcomes?</h2>
+    <p>V4's probability output was <em>inverted</em>. V6's hand-built score is right-signed, though weak:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Ranked by</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">corr</th></tr></thead>
+      <tbody>
+        <tr><td>V6 confidence</td><td class="num">+$4.41</td><td class="num">−$1.17</td><td class="num">+$5.24</td><td class="num up">+$9.20</td><td class="num">+0.065</td></tr>
+        <tr class="hi"><td>M1 trigger strength</td><td class="num">+$2.44</td><td class="num">−$0.05</td><td class="num">+$2.28</td><td class="num up">+$13.09</td><td class="num">+0.173</td></tr>
+        <tr><td>H1 gap</td><td class="num">+$2.18</td><td class="num">+$4.69</td><td class="num">+$0.92</td><td class="num up">+$9.97</td><td class="num">+0.114</td></tr>
+      </tbody>
+    </table></div>
+    <p>All three point the right way. On 101 trades none of it is conclusive, but it is the opposite of
+      V4's result rather than a repeat of it.</p>
+  </section>
+
+  <section>
+    <h2>The edge is the 120-minute horizon</h2>
+    <p>90 of 101 exits are the time stop; only 11 are stop losses. Adding a $30 take profit and removing
+      the time stop <strong>collapses the result to −$15</strong> (PF 0.988). So the strategy is:
+      <em>qualified trigger → hold about two hours → exit at market</em>. The $25 stop participates in
+      roughly one trade in nine.</p>
+    <p>That is a legitimate way to build a system, but it means the risk management is doing almost
+      nothing, and <strong>the entire edge rides on the one parameter the sweep above shows is
+      fitted</strong>.</p>
+  </section>
+
+  <section>
+    <h2>Audit — every V4 finding fixed</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>V4 finding</th><th>V6</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>H1 naked position after ECN fallback</td><td class="fixed">fixed</td><td><code>EnsureInitialStopProtection()</code> first in the tick, retries, closes after 5</td></tr>
+        <tr><td>H2 digit-dependent slippage</td><td class="fixed">fixed</td><td><code>SlippagePointsForBroker()</code>, movement ÷ Point</td></tr>
+        <tr><td>H3 per-tick history scans</td><td class="fixed">fixed</td><td>one-pass cache + invalidation; <code>ArraySort</code> dedupe; 1 Hz panel</td></tr>
+        <tr><td>H4 GlobalVariables never deleted</td><td class="fixed">fixed</td><td>in-memory state, <code>IsTesting()</code> branch, delete + orphan sweep</td></tr>
+        <tr><td>M2 ATR trail on forming bar</td><td class="fixed">fixed</td><td><code>iATR(…,1)</code></td></tr>
+        <tr><td>M3 stop + freeze summed</td><td class="fixed">fixed</td><td><code>MathMax</code></td></tr>
+        <tr><td>M4 silent validation failures</td><td class="fixed">fixed</td><td><code>InvalidInput(name, requirement)</code> everywhere</td></tr>
+        <tr><td>M5 no close retries</td><td class="fixed">fixed</td><td>3 attempts + retryable-error list + pending retry</td></tr>
+        <tr><td>L7 silent max-lot cap</td><td class="fixed">fixed</td><td>prints a warning</td></tr>
+        <tr><td>L8 modal alert by default</td><td class="fixed">fixed</td><td>default false</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Audit — new findings</h2>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">V6-1</span><h3>The staleness guard was removed</h3></div>
+      <p>V4 rejected any regime bar older than 12 hours. V6's <code>GVLastFullyClosedShift</code>
+        (196–208) checks only that the bar has closed — <strong>there is no upper bound on age</strong>.</p>
+      <p>Measured on your data: H1 regime bars up to <strong>54 hours old</strong>, 530 valid bars
+        affected, and <strong>6 qualified signals fired on H1 data more than 12 hours stale</strong>.
+        After a weekend or a feed outage the EA trades Monday off Friday's H1 regime. P/L impact is
+        small — restoring a 12-hour bound gives +$461.88 against +$446.27 — but that is a six-signal
+        sample, not a reason to leave it out.</p>
+<pre>if(decisionTime-barClose &gt; maxAgeSeconds) return(-1);   // 3*tf*60 for M5, 12*3600 for H1</pre>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">V6-2</span><h3><code>atrM5Slow</code> is dead but still gates every signal</h3></div>
+      <p>Line 225 computes <code>GVATR(M5,48,closedM5)</code> and line 228 rejects the whole
+        calculation if it is ≤ 0. <strong>The value is never used again</strong> — in V4 it fed the
+        <code>volatilityRatio</code> feature, which no longer exists. Since <code>GVATR</code> returns 0
+        if <em>any</em> of 48 true ranges is zero, a single flat M5 bar silently kills the signal for no
+        reason. Delete it, or use it.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-3</span><h3><code>SendEntry</code> returns false after a successful open</h3></div>
+      <p>Two paths (1063–1069, 1084–1092) return <code>false</code> when the order <em>is already
+        open</em>, and <code>g_lastEntryTime</code> is never reached. Nothing breaks — the cache is
+        invalidated at 1061 and <code>FindManagedTicket()</code> blocks re-entry — but a caller cannot
+        distinguish "no position" from "position open, protection pending".</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-4</span><h3><code>MaximumM1ChaseATR</code> is measured in M5 ATR</h3></div>
+      <p>Line 314 divides by <code>atrM5</code>, not <code>atrM1</code>. Someone setting "1 ATR of
+        chase" gets roughly 5× more tolerance than they expect. The behaviour is defensible; the name
+        is not.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-5</span><h3><code>GV_STATE_EXHAUSTING</code> is never assigned</h3></div>
+      <p>Defined at 24, rendered at 129, tested at 1317 and 1468 — but no code path sets it. Half the
+        velocity-exit condition is dead, so <code>UseVelocityExit</code> is weaker than it reads.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-6</span><h3>Two sources of truth for bar requirements</h3></div>
+      <p><code>GV_REQUIRED_M5_BARS 80</code> and <code>GV_REQUIRED_H1_BARS 40</code> are checked at
+        213–214, then <code>GVLastFullyClosedShift</code> is called with hard-coded <code>79</code> and
+        <code>30</code> at 220–221. Four numbers, two of them silently authoritative. (V6-7:
+        <code>result.velocityM15</code> holds an M1 value — leftover field name.)</p>
+    </article>
+  </section>
+
+  <section>
+    <h2>What to do next</h2>
+    <ol>
+      <li><strong>Answer the provenance question.</strong> Were the thresholds and the SL/hold defaults
+        chosen on this gold history? That determines whether §4 is validation or in-sample fitting, and
+        it moves the conclusion further than any further computation would.</li>
+      <li><strong>Get more M1 data.</strong> 47 trading days cannot settle this. Two years of M1 would
+        let the full stack be tested properly. Nothing substitutes for it.</li>
+      <li><strong>Re-pick the hold time on the long sample, or stop treating it as a constant.</strong>
+        90–150 all work on the 560-trade core; choose from that range on evidence, or make it scale with
+        ATR.</li>
+      <li><strong>Fix V6-1 and V6-2 before live.</strong> Neither loses money today; both are
+        correctness issues that will bite on a Monday or a bad feed.</li>
+      <li><strong>Do not re-enable trailing without re-measuring.</strong> Its absence is why this
+        backtest has a determinate answer at all — and on this sample it cut net from $446 to $312
+        anyway.</li>
+    </ol>
+  </section>
+
+  <footer class="foot">
+    <span>Independent Python port; not MetaTrader's Strategy Tester. File not compiled. Spread modelled at $0.30.</span>
+    <span>V4 harness reused unchanged for execution and management, so the two versions are measured the same way.</span>
+  </footer>
+</div>
+
+<script>
+const DATA={"holds":[30,60,90,120,150,180,240,300,360],"hold_m1":[7.73,101.9,288.97,446.27,330.47,170.0,273.34,192.09,-34.44],"hold_core":[189.13,348.0,724.79,801.7,1138.8,630.96,733.49,984.72,730.93],"sls":[10,15,20,25,30,35,40,50],"sl_m1":[114.96,111.13,297.62,446.27,460.72,436.02,416.02,432.99],"core_eq":[[1753434300,2.31],[1753442100,4.98],[1753452300,5.79],[1753707900,4.45],[1753830300,0.56],[1753884300,-4.12],[1753902600,8.79],[1753996800,5.46],[1754010300,6.72],[1754024700,5.34],[1754070300,10.78],[1754080800,9.51],[1754276700,2.58],[1754374500,-4.02],[1754406300,4.85],[1754424300,0.28],[1754492700,-3.78],[1754550300,-5.55],[1754601900,-5.98],[1754892300,-2.15],[1754924700,-2.43],[1755011400,-0.66],[1755047400,-4.42],[1755079500,-0.81],[1755097800,-7.68],[1755147900,-5.75],[1755198600,-6.77],[1755209400,-11.23],[1755230700,-15.96],[1755486300,-10.33],[1755493500,-27.85],[1755508500,-29.33],[1755619500,-38.69],[1755632700,-32.07],[1755639900,-31.3],[1755666300,-32.58],[1755709500,-23.89],[1755719700,-26.88],[1755857100,-29.64],[1755868500,-32.07],[1756239000,-29.1],[1756263900,-29.15],[1756303500,-37.97],[1756325100,-27.61],[1756388700,-29.23],[1756411500,-24.44],[1756422000,-20.75],[1756497900,-13.23],[1756506300,-18.06],[1756725600,-22.9],[1756774800,-24.03],[1756833000,-18.01],[1756843500,-7.52],[1756850700,-0.07],[1756884300,-8.22],[1756919100,-1.95],[1756929000,6.17],[1756983900,-10.2],[1757067000,-15.94],[1757099100,-17.68],[1757336700,-11.7],[1757344200,-10.01],[1757351400,9.96],[1757401500,11.18],[1757412600,1.38],[1757473500,-2.83],[1757484300,-14.77],[1757514600,-6.29],[1757563800,-11.8],[1757581500,-5.15],[1757588700,-10.69],[1757660700,-3.3],[1757667900,-3.49],[1757916000,-11.13],[1757937900,-20.66],[1757963400,1.92],[1758024300,2.02],[1758035100,0.77],[1758082500,-2.86],[1758105900,5.19],[1758114000,4.19],[1758189900,18.31],[1758196500,-6.69],[1758254700,-9.62],[1758312600,-6.72],[1758323100,-3.4],[1758511200,-0.83],[1758521100,-0.77],[1758551100,1.58],[1758636300,6.01],[1758651600,2.73],[1758711900,3.05],[1758719100,-5.8],[1758746100,4.8],[1758814200,0.8],[1758827400,-13.14],[1758870300,-18.42],[1758895800,-24.96],[1758913500,-13.96],[1759138200,-1.24],[1759145400,-2.74],[1759154700,-4.07],[1759212900,6.89],[1759223100,9.81],[1759229700,-15.19],[1759293300,-12.72],[1759302300,-20.92],[1759385100,-31.58],[1759404000,-36.36],[1759414200,-30.59],[1759525500,-37.78],[1759723500,-54.57],[1759734300,-45.81],[1759741500,-49.09],[1759807500,-46.72],[1759814700,-58.73],[1759855800,-44.21],[1759893000,-34.92],[1759900200,-32.46],[1759907400,-13.09],[1760025900,0.14],[1760028300,-24.86],[1760048700,-49.86],[1760325900,-55.17],[1760350200,-52.46],[1760360100,-46.92],[1760414700,-30.93],[1760426100,-5.19],[1760430900,-30.19],[1760501100,-15.44],[1760508900,-11.01],[1760519100,-9.79],[1760598300,-7.25],[1760628000,-5.66],[1760648700,13.61],[1760670000,52.24],[1760674500,27.24],[1760735700,27.21],[1760979600,2.21],[1760990700,12.93],[1761060300,51.3],[1762208700,268.49],[1762229400,287.87],[1762250400,262.87],[1762293900,286.39],[1762311900,279.58],[1762376700,276.96],[1762390800,268.42],[1762420200,278.53],[1762427400,293.45],[1762484700,278.58],[1762522200,267.23],[1762755600,276.78],[1762762800,291.32],[1762770300,297.73],[1762830300,311.08],[1762837500,318.93],[1762845600,313.71],[1762920600,305.17],[1762940100,287.24],[1762981500,293.09],[1763051400,268.09],[1763118300,273.7],[1763129700,312.87],[1763136900,388.31],[1763403000,399.01],[1763410200,383.41],[1763450100,385.42],[1763461800,360.42],[1763499900,363.72],[1763546700,353.75],[1763574600,328.75],[1763611200,303.75],[1763672700,293.5],[1763708700,292.27],[1763723100,275.3],[1763964300,268.1],[1764003900,272.01],[1764012000,271.5],[1764043500,272.54],[1764054900,273.0],[1764088500,248.0],[1764141300,248.46],[1764173100,232.23],[1764195600,226.72],[1764248700,223.0],[1764291600,221.41],[1764302700,246.25],[1764353400,262.8],[1764360900,278.16],[1764598500,268.07],[1764663300,260.82],[1764685200,244.23],[1764745500,242.47],[1764780600,217.47],[1764842700,207.37],[1764882300,201.86],[1764925500,211.15],[1764956100,228.86],[1764957900,203.86],[1765206600,198.43],[1765224300,185.17],[1765274700,176.06],[1765311000,164.11],[1765375800,156.93],[1765426200,154.71],[1765462200,143.16],[1765481100,181.32],[1765541400,205.94],[1765550400,211.84],[1765560000,186.84],[1765775400,203.4],[1765786800,218.28],[1765794000,215.63],[1765897800,194.6],[1765951500,193.27],[1765962600,186.79],[1765994700,173.95],[1766077500,160.85],[1766127600,154.57],[1766174700,156.3],[1766182800,145.3],[1766383500,157.35],[1766390700,162.1],[1766400900,154.38],[1766462700,176.26],[1766469900,177.58],[1766505900,158.65],[1766549400,152.77],[1766603100,143.73],[1766999700,118.73],[1767012900,115.81],[1767021000,109.84],[1767121500,98.74],[1767142800,99.28],[1767151200,74.28],[1767337500,81.71],[1767348300,86.66],[1767366300,86.9],[1767585000,61.9],[1767597000,56.63],[1767607500,63.6],[1767668400,38.6],[1767686700,27.19],[1767724800,34.53],[1767782400,9.53],[1767806400,18.11],[1767861000,28.39],[1767906300,15.61],[1767920700,13.66],[1767957300,16.83],[1767975300,31.55],[1767987600,21.93],[1768187700,73.29],[1768223100,71.22],[1768241100,94.35],[1768328100,87.64],[1768370700,98.09],[1768377900,95.6],[1768388700,95.34],[1768469400,77.94],[1768497300,52.94],[1768539900,54.76],[1768819500,49.82],[1768853100,51.13],[1768870800,47.72],[1768899900,66.1],[1768911300,72.73],[1768925100,84.9],[1768968300,146.32],[1768979700,179.5],[1768986000,154.5],[1769112300,190.83],[1769119500,203.58],[1769132400,202.8],[1769140800,197.03],[1769187900,203.39],[1769198700,217.63],[1769397600,251.23],[1769404800,266.93],[1769429400,257.7],[1769502900,267.28],[1769510700,263.45],[1769521800,238.45],[1769591100,259.24],[1769598900,267.04],[1769655900,294.44],[1769671200,269.44],[1769676900,244.44],[1769753100,329.37],[1769767500,360.72],[1769771700,335.72],[1770011100,310.72],[1770012900,285.72],[1770025200,260.72],[1770116700,292.27],[1770178500,365.0],[1770187800,381.26],[1770192300,356.26],[1770268500,331.26],[1770295500,306.26],[1770304800,281.26],[1770348000,326.2],[1770391800,343.62],[1770399000,390.33],[1770625200,365.33],[1770663900,394.09],[1770679500,369.09],[1770729300,367.37],[1770734400,342.37],[1770794100,340.97],[1770820500,315.97],[1770847800,320.82],[1770934500,314.13],[1770944700,341.1],[1770974100,316.1],[1771020300,326.71],[1771203600,317.9],[1771211100,319.31],[1771243500,321.94],[1771268700,302.75],[1771441500,298.33],[1771492200,328.73],[1771499400,326.67],[1771528200,319.03],[1771592700,317.03],[1771606800,292.03],[1771621500,297.41],[1771815600,332.21],[1771830300,314.67],[1771859100,312.03],[1771952700,340.66],[1771988400,315.66],[1772010900,315.7],[1772049000,324.63],[1772093100,323.98],[1772118300,321.79],[1772154300,304.66],[1772212200,323.3],[1772223000,314.11],[1772233500,323.55],[1772420400,298.55],[1772449500,302.86],[1772510700,308.54],[1772521500,301.25],[1772543100,339.62],[1772662800,329.97],[1772693400,304.97],[1772733000,279.97],[1772748000,276.56],[1772802600,288.34],[1772838300,284.39],[1773026100,259.39],[1773100800,281.75],[1773113100,294.21],[1773145500,294.91],[1773170100,305.4],[1773213000,298.34],[1773246300,273.34],[1773284400,248.34],[1773324300,234.17],[1773342600,239.26],[1773397800,263.85],[1773405300,258.49],[1773429000,233.49],[1773644700,222.92],[1773663300,234.51],[1773734400,209.51],[1773822600,184.51],[1773846300,281.94],[1773914700,381.99],[1773921900,407.04],[1773930600,482.86],[1774015200,457.86],[1774224000,471.32],[1774260300,537.75],[1774338000,512.75],[1774357200,487.75],[1774404300,562.65],[1774411500,598.01],[1774418700,582.07],[1774530600,567.31],[1774538400,542.31],[1774563000,517.31],[1774620900,492.31],[1774865700,521.62],[1774879800,522.81],[1774937700,497.81],[1774994700,519.86],[1775005200,528.49],[1775019900,524.63],[1775073900,546.49],[1775077200,521.49],[1775121600,598.77],[1775124600,573.77],[1775148300,548.77],[1775480700,552.46],[1775531100,558.41],[1775582580,533.41],[1775588580,508.41],[1775618100,611.03],[1775619900,586.03],[1775708100,573.67],[1775754300,594.94],[1775761800,620.06],[1775840700,629.97],[1775846160,604.97],[1776050040,579.97],[1778048100,644.41],[1778065500,663.32],[1778072700,685.88],[1778079600,660.88],[1778137500,644.24],[1778155200,619.24],[1778179500,594.24],[1778209500,585.01],[1778261400,560.01],[1778476200,562.09],[1778489100,585.78],[1778496600,578.99],[1778555700,606.73],[1778558400,581.73],[1778612700,601.33],[1778700000,576.33],[1778743500,551.33],[1778785500,557.79],[1778806800,571.23],[1778821500,606.16],[1778839500,635.98],[1779079500,610.98],[1779152400,594.96],[1779163800,578.84],[1779210300,602.81],[1779239100,600.58],[1779247500,589.04],[1779387900,582.98],[1779404700,580.32],[1779466500,567.57],[1779670800,531.44],[1779721500,526.58],[1779757200,520.62],[1779764400,495.62],[1779789900,492.63],[1779815100,483.2],[1779865800,484.96],[1779873000,488.13],[1779883500,483.0],[1779944700,528.02],[1779951900,556.67],[1779959100,543.94],[1780059000,556.94],[1780068600,531.94],[1780315500,538.65],[1780401900,529.81],[1780438200,527.99],[1780492500,520.13],[1780521300,522.1],[1780528500,518.76],[1780567500,511.24],[1780589700,540.53],[1780635900,552.97],[1780643700,560.28],[1780693500,560.35],[1780927800,535.35],[1780967100,538.08],[1780981500,522.44],[1781010600,521.34],[1781025000,505.78],[1781068200,549.34],[1781076000,548.43],[1781105400,523.43],[1781146800,547.54],[1781198100,562.38],[1781226000,607.23],[1781235840,582.23],[1781273100,566.66],[1781304900,549.52],[1781499900,577.05],[1781507100,577.67],[1781541600,593.71],[1781618700,592.97],[1781703900,581.74],[1781723400,601.32],[1781730000,576.32],[1781781300,587.75],[1781788500,606.31],[1781798700,610.71],[1781838000,629.94],[1781845200,633.21],[1781853900,662.08],[1782140700,663.6],[1782201900,671.02],[1782210900,682.74],[1782219600,658.4],[1782270000,670.86],[1782281700,702.75],[1782288900,692.39],[1782364920,667.39],[1782421500,657.91],[1782475500,662.28],[1782486600,660.11],[1782499800,692.28],[1782745500,676.04],[1782777300,676.9],[1782804540,651.9],[1782882300,684.2],[1782889500,682.44],[1782983100,680.67],[1783058700,701.34],[1783310700,698.56],[1783362300,701.46],[1783394100,691.33],[1783404300,699.3],[1783413000,702.74],[1783481940,677.74],[1783521960,652.74],[1783584900,637.82],[1783628700,636.11],[1783638300,626.82],[1783670700,611.77],[1783692300,603.1],[1783928100,620.47],[1783936500,620.9],[1783962900,641.31],[1784106600,643.12],[1784250000,646.89],[1784322300,639.4],[1784534700,635.62],[1784561700,625.47],[1784613900,642.05],[1784621100,649.79],[1784629200,672.34],[1784700300,694.81],[1784707500,689.29],[1784740200,720.75],[1784811900,722.62],[1784819400,728.12],[1784827800,746.4],[1784879400,745.59],[1785216300,758.65],[1785251400,753.97],[1785341700,767.58],[1785348900,776.1],[1785382680,751.1],[1785420600,765.08],[1785427800,756.67],[1785495900,771.15],[1785507900,762.88],[1785519000,771.03],[1785756300,759.0],[1785772500,761.2],[1785780600,770.31],[1785837900,772.73],[1785849600,753.69],[1785870600,750.24],[1785917100,757.56],[1785926400,770.53],[1785956700,785.47],[1785992700,813.71],[1786025100,801.7]],"m1_window":[1775433600,1786060800]};
+(function(){
+  const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  const NS="http://www.w3.org/2000/svg";
+  const el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  const money=v=>(v<0?"−$":"+$")+Math.abs(v).toFixed(0);
+
+  function svgIn(host,W,H){host.querySelectorAll("svg").forEach(s=>s.remove());
+    const s=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});host.appendChild(s);return s;}
+
+  function holdChart(){
+    const host=document.getElementById("p-hold"),tip=document.getElementById("t-hold");
+    const W=760,H=300,L=52,R=22,T=18,B=44;
+    const svg=svgIn(host,W,H);
+    const xs=DATA.holds, a=DATA.hold_m1, b=DATA.hold_core;
+    const na=Math.max(...a), nb=Math.max(...b);
+    const A=a.map(v=>100*v/na), Bv=b.map(v=>100*v/nb);
+    const x0=Math.min(...xs),x1=Math.max(...xs);
+    const y0=Math.min(0,...A,...Bv), y1=105;
+    const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    [0,25,50,75,100].forEach(v=>{
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-9,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")});t.textContent=v+"%";svg.appendChild(t);});
+    xs.forEach(v=>{const t=el("text",{x:X(v),y:H-22,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":11,"font-family":css("--mono")});t.textContent=v;svg.appendChild(t);});
+    const lab=el("text",{x:(L+W-R)/2,y:H-5,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":10.5,"font-family":css("--mono")});
+    lab.textContent="MaximumHoldingMinutes";svg.appendChild(lab);
+    [[Bv,"--s2"],[A,"--s1"]].forEach(([ser,c])=>{
+      svg.appendChild(el("path",{d:ser.map((v,i)=>(i?"L":"M")+X(xs[i]).toFixed(1)+" "+Y(v).toFixed(1)).join(" "),
+        fill:"none",stroke:css(c),"stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));});
+    [[A,"--s1",a,"101 trades",-10,"end"],[Bv,"--s2",b,"560 trades",10,"start"]].forEach(([ser,c,raw,nm,dx,anc])=>{
+      const pk=ser.indexOf(100);
+      svg.appendChild(el("circle",{cx:X(xs[pk]),cy:Y(100),r:5,fill:css(c),
+        stroke:css("--surface"),"stroke-width":2}));
+      const t=el("text",{x:X(xs[pk])+dx,y:Y(100)-9,"text-anchor":anc,fill:css(c),
+        "font-size":11.5,"font-weight":600,"font-family":css("--mono")});
+      t.textContent="peak "+xs[pk];svg.appendChild(t);
+      ser.forEach((v,i)=>{
+        const dot=el("circle",{cx:X(xs[i]),cy:Y(v),r:9,fill:"transparent"});
+        dot.style.cursor="crosshair";
+        dot.addEventListener("mouseenter",()=>{
+          tip.innerHTML=`<span class="k">${nm} · hold ${xs[i]} min</span><br>net <b>${money(raw[i])}</b><br><span class="k">${v.toFixed(0)}% of its best</span>`;
+          tip.style.opacity=1;const rc=host.getBoundingClientRect();
+          tip.style.left=Math.min(Math.max(X(xs[i])/W*rc.width-70,4),rc.width-150)+"px";
+          tip.style.top=Math.max(Y(v)/H*rc.height-72,2)+"px";});
+        dot.addEventListener("mouseleave",()=>tip.style.opacity=0);
+        svg.appendChild(dot);});});
+  }
+
+  function eqChart(){
+    const host=document.getElementById("p-eq"),tip=document.getElementById("t-eq");
+    const W=760,H=280,L=56,R=26,T=16,B=36;
+    const svg=svgIn(host,W,H);
+    const d=DATA.core_eq;
+    const xs=d.map(p=>p[0]),ys=d.map(p=>p[1]);
+    const x0=Math.min(...xs),x1=Math.max(...xs);
+    let y0=Math.min(0,...ys),y1=Math.max(...ys); const pad=(y1-y0)*0.1; y0-=pad;y1+=pad;
+    const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    const w0=Math.max(DATA.m1_window[0],x0), w1=Math.min(DATA.m1_window[1],x1);
+    svg.appendChild(el("rect",{x:X(w0),y:T,width:Math.max(0,X(w1)-X(w0)),height:H-T-B,
+      fill:css("--s2"),opacity:.09}));
+    const wl=el("text",{x:(X(w0)+X(w1))/2,y:T+13,"text-anchor":"middle",fill:css("--s2"),
+      "font-size":10,"font-family":css("--mono")});wl.textContent="M1 window";svg.appendChild(wl);
+    for(let v=0;v<=y1;v+=250){
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-9,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")});t.textContent=(v>0?"+":"")+v;svg.appendChild(t);}
+    let cur="";const ticks=[];
+    d.forEach(p=>{const dt=new Date(p[0]*1000);const k=dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0");
+      if(k!==cur){if(dt.getUTCMonth()%3===0)ticks.push([p[0],k]);cur=k;}});
+    ticks.forEach(([tt,k])=>{const t=el("text",{x:X(tt),y:H-12,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":11,"font-family":css("--mono")});t.textContent=k;svg.appendChild(t);});
+    svg.appendChild(el("path",{d:d.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" "),
+      fill:"none",stroke:css("--s2"),"stroke-width":2,"stroke-linejoin":"round"}));
+    const last=d[d.length-1];
+    svg.appendChild(el("circle",{cx:X(last[0]),cy:Y(last[1]),r:4,fill:css("--s2"),
+      stroke:css("--surface"),"stroke-width":2}));
+    const lt=el("text",{x:X(last[0])-6,y:Y(last[1])-11,"text-anchor":"end",fill:css("--s2"),
+      "font-size":12,"font-weight":600,"font-family":css("--mono")});
+    lt.textContent="+$802";svg.appendChild(lt);
+    const cross=el("line",{y1:T,y2:H-B,stroke:css("--ink-3"),"stroke-width":1,"stroke-dasharray":"3 3",opacity:0});
+    svg.appendChild(cross);
+    const dot=el("circle",{r:4,fill:css("--s2"),stroke:css("--surface"),"stroke-width":2,opacity:0});
+    svg.appendChild(dot);
+    const hit=el("rect",{x:L,y:T,width:W-L-R,height:H-T-B,fill:"transparent"});svg.appendChild(hit);
+    function mv(ev){const rc=host.getBoundingClientRect();
+      const cx=((ev.touches?ev.touches[0].clientX:ev.clientX)-rc.left)/rc.width*W;
+      if(cx<L||cx>W-R){lv();return;}
+      const t=x0+(cx-L)/(W-L-R)*(x1-x0);
+      let lo=0,hi=d.length-1;while(lo<hi){const m=(lo+hi)>>1;if(d[m][0]<t)lo=m+1;else hi=m;}
+      const p=d[lo];
+      cross.setAttribute("x1",X(p[0]));cross.setAttribute("x2",X(p[0]));cross.setAttribute("opacity",1);
+      dot.setAttribute("cx",X(p[0]));dot.setAttribute("cy",Y(p[1]));dot.setAttribute("opacity",1);
+      tip.innerHTML=`<span class="k">${new Date(p[0]*1000).toISOString().slice(0,10)}</span><br>cumulative <b>${money(p[1])}</b>`;
+      tip.style.opacity=1;
+      tip.style.left=Math.min(Math.max(X(p[0])/W*rc.width+12,4),rc.width-140)+"px";
+      tip.style.top="10px";}
+    function lv(){tip.style.opacity=0;cross.setAttribute("opacity",0);dot.setAttribute("opacity",0);}
+    host.addEventListener("mousemove",mv);host.addEventListener("mouseleave",lv);
+    host.addEventListener("touchmove",mv,{passive:true});host.addEventListener("touchend",lv);
+  }
+
+  function draw(){holdChart();eqChart();}
+  draw();
+  let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(draw,150);});
+  matchMedia("(prefers-color-scheme:dark)").addEventListener("change",draw);
+  new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+})();
+</script>

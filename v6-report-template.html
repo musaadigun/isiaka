@@ -1,0 +1,489 @@
+<title>XVISION Gold Velocity AI EA V6 — Audit and Backtest</title>
+<style>
+  :root{
+    --ground:#EDF0F4; --surface:#FAFBFD; --raised:#FFFFFF;
+    --line:#D5DBE3; --line-soft:#E4E9EF; --grid:#E7ECF1;
+    --ink:#0B111A; --ink-2:#43566B; --ink-3:#6B7D91;
+    --gold:#8A6A0F; --steel:#2C5B85;
+    --sev-block:#A8261C; --sev-block-bg:#F7E4E2;
+    --sev-med:#B4530C;   --sev-med-bg:#FAEADD;
+    --sev-good:#1F6B3F;  --sev-good-bg:#E0EFE6;
+    --s1:#2a78d6; --s2:#eb6834; --pos:#2a78d6; --neg:#e34948;
+    --shadow:0 1px 2px rgba(11,17,26,.05), 0 6px 20px -12px rgba(11,17,26,.22);
+    --serif:ui-serif,Charter,"Bitstream Charter","Source Serif 4",Cambria,Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0A1019; --surface:#101A28; --raised:#182436;
+      --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+      --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+      --gold:#D9AE47; --steel:#7FB2E0;
+      --sev-block:#E8695E; --sev-block-bg:#2E1714;
+      --sev-med:#E0913F;   --sev-med-bg:#2B1E10;
+      --sev-good:#5FBE85;  --sev-good-bg:#12261B;
+      --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A1019; --surface:#101A28; --raised:#182436;
+    --line:#2C3D52; --line-soft:#1C2A3C; --grid:#1E2C3E;
+    --ink:#EEF3F8; --ink-2:#9FB1C4; --ink-3:#7A8DA3;
+    --gold:#D9AE47; --steel:#7FB2E0;
+    --sev-block:#E8695E; --sev-block-bg:#2E1714;
+    --sev-med:#E0913F;   --sev-med-bg:#2B1E10;
+    --sev-good:#5FBE85;  --sev-good-bg:#12261B;
+    --s1:#3987e5; --s2:#d95926; --pos:#3987e5; --neg:#e66767;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground); color:var(--ink); font-family:var(--serif);
+    font-size:17px; line-height:1.62; -webkit-font-smoothing:antialiased; margin:0; padding:0 20px 96px}
+  .wrap{max-width:74ch; margin:0 auto}
+  p{margin:0 0 .9em} p:last-child{margin-bottom:0}
+  a{color:var(--steel)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--gold); outline-offset:3px}
+  code{font-family:var(--mono); font-size:.845em; background:var(--line-soft);
+    padding:.1em .34em; border-radius:3px; word-break:break-word}
+  .mast{padding:64px 0 0; display:flex; flex-direction:column; gap:18px}
+  .file{font-family:var(--mono); font-size:.76rem; letter-spacing:.06em; color:var(--ink-3)}
+  .mast h1{font-size:clamp(2rem,5.6vw,3rem); line-height:1.08; margin:0; font-weight:600;
+    letter-spacing:-.018em; text-wrap:balance}
+  .mast h1 .x{color:var(--gold)}
+  .rule{height:2px; border:0; margin:0;
+    background:linear-gradient(90deg,var(--gold) 0%,var(--gold) 22%,var(--line) 22%,var(--line) 100%)}
+  .meta{display:flex; flex-wrap:wrap; gap:6px 26px; font-family:var(--mono);
+    font-size:.75rem; color:var(--ink-3)} .meta b{color:var(--ink-2); font-weight:500}
+  section{padding-top:52px; display:flex; flex-direction:column; gap:16px}
+  h2{font-size:1.55rem; line-height:1.2; margin:0; font-weight:600; letter-spacing:-.012em; text-wrap:balance}
+  h3{font-size:1.05rem; margin:0; font-weight:700; text-wrap:balance}
+  .eyebrow{font-family:var(--mono); font-size:.7rem; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--ink-3); margin:0}
+  .verdict{background:var(--raised); border:1px solid var(--line); border-radius:4px;
+    padding:26px 28px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:12px}
+  .verdict .lede{font-size:1.12rem; line-height:1.55}
+  .ask{font-family:var(--mono); font-size:.8rem; color:var(--sev-med); background:var(--sev-med-bg);
+    border-left:3px solid var(--sev-med); padding:11px 14px; border-radius:0 3px 3px 0; line-height:1.55}
+  .win{background:var(--sev-good-bg); border-left:3px solid var(--sev-good);
+    padding:14px 18px; border-radius:0 3px 3px 0; font-size:.96rem; color:var(--ink-2)}
+  .win b{color:var(--ink)}
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px}
+  .tile{background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--tc);
+    border-radius:3px; padding:14px 16px; display:flex; flex-direction:column; gap:2px}
+  .tile .n{font-family:var(--mono); font-size:1.55rem; font-weight:600; line-height:1.15;
+    color:var(--tc); font-variant-numeric:tabular-nums}
+  .tile .l{font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--ink-3)}
+  .tile .s{font-size:.82rem; color:var(--ink-2); line-height:1.35; margin-top:3px}
+  .t-a{--tc:var(--s1)} .t-b{--tc:var(--sev-good)} .t-c{--tc:var(--sev-med)} .t-d{--tc:var(--ink-3)}
+  figure{margin:0; background:var(--surface); border:1px solid var(--line); border-radius:4px;
+    padding:18px 18px 12px; display:flex; flex-direction:column; gap:10px}
+  figcaption{font-size:.9rem; color:var(--ink-2); line-height:1.5}
+  figcaption b{color:var(--ink); font-weight:600}
+  .chart-hd{display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px}
+  .chart-hd h3{font-size:.97rem}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; font-family:var(--mono); font-size:.71rem; color:var(--ink-2)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .swatch{width:14px; height:3px; border-radius:2px; display:inline-block}
+  .plot{position:relative; width:100%} .plot svg{display:block; width:100%; height:auto; overflow:visible}
+  .tip{position:absolute; pointer-events:none; opacity:0; transition:opacity .1s; background:var(--raised);
+    border:1px solid var(--line); border-radius:3px; box-shadow:var(--shadow); padding:7px 10px;
+    font-family:var(--mono); font-size:.7rem; line-height:1.5; color:var(--ink); white-space:nowrap;
+    z-index:5; font-variant-numeric:tabular-nums}
+  .tip .k{color:var(--ink-3)}
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-family:var(--mono); font-size:.775rem;
+    font-variant-numeric:tabular-nums; line-height:1.5}
+  th,td{text-align:left; padding:8px 14px; border-bottom:1px solid var(--line-soft); white-space:nowrap}
+  thead th{font-size:.67rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+    font-weight:500; background:var(--raised); border-bottom:1px solid var(--line)}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  tr.hi td{background:var(--sev-good-bg)} tr.hi td:first-child{font-weight:700; color:var(--ink)}
+  tr.lo td{background:var(--sev-med-bg)}
+  .no{color:var(--ink-3)} .up{color:var(--sev-good)} .dn{color:var(--sev-block)}
+  .fixed{color:var(--sev-good); font-weight:600}
+  ul,ol{margin:0; padding-left:1.2em; display:flex; flex-direction:column; gap:9px}
+  ol li::marker{font-family:var(--mono); font-size:.85em; color:var(--ink-3)}
+  .find{background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--fc);
+    border-radius:0 4px 4px 0; padding:18px 22px; display:flex; flex-direction:column; gap:10px}
+  .f-med{--fc:var(--sev-med)} .f-low{--fc:var(--ink-3)}
+  .find .hd{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
+  .tag{font-family:var(--mono); font-size:.71rem; font-weight:600; color:var(--fc);
+    background:var(--raised); border:1px solid var(--line); padding:2px 7px; border-radius:3px; flex:none}
+  .find h3{flex:1 1 16ch}
+  pre{margin:0; background:var(--raised); border:1px solid var(--line); border-radius:3px;
+    padding:13px 15px; overflow-x:auto; font-family:var(--mono); font-size:.775rem;
+    line-height:1.6; color:var(--ink-2)}
+  .note{border-left:2px solid var(--line); padding-left:16px; color:var(--ink-2); font-size:.95rem}
+  .foot{margin-top:56px; padding-top:22px; border-top:1px solid var(--line); font-family:var(--mono);
+    font-size:.72rem; color:var(--ink-3); display:flex; flex-direction:column; gap:6px}
+  @media (max-width:560px){ body{font-size:16px; padding:0 14px 72px} .mast{padding-top:44px}
+    .verdict{padding:18px} figure{padding:14px 12px 10px} .find{padding:16px} }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="file">XVISION_Gold_Velocity_AI_EA_V6.mq4 · 1664 lines · closed H1 → M5 → M1</div>
+    <h1><span class="x">XVISION</span> V6 — audit and backtest</h1>
+    <hr class="rule">
+    <div class="meta">
+      <span><b>Date</b> 2026-08-08</span>
+      <span><b>Build</b> not compiled</span>
+      <span><b>Testable M1</b> 47 trading days</span>
+      <span><b>Model</b> none — deterministic</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="verdict">
+      <p class="eyebrow">Verdict</p>
+      <p class="lede">V6 is a different system and a materially better one. <strong>Every blocking
+        finding from the V4 audit is fixed, and fixed correctly.</strong> The logistic model is gone,
+        replaced by a deterministic three-timeframe threshold stack. The result is consistent with a
+        small real edge — and not yet established as one.</p>
+      <p class="win"><b>The structural win:</b> dropping the trailing stop collapsed the
+        intrabar-ordering ambiguity that made V4 unmeasurable. Both orderings now give <b>exactly the
+        same number</b>. V4's ±$390 bracket, the thing that left its sign undetermined, does not exist
+        in V6.</p>
+      <p class="ask">One question I can't answer and you can: <strong>what data were the 17 thresholds
+        chosen on?</strong> If they were tuned on this gold history, everything below is in-sample. If
+        they were set a priori, the out-of-window agreement in §4 is real evidence. This changes the
+        interpretation more than any further computation would.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Two samples, two readings</p>
+    <div class="tiles">
+      <div class="tile t-a"><span class="n">1.84</span><span class="l">PF · full stack</span>
+        <span class="s">101 trades, 47 days · t = 2.24</span></div>
+      <div class="tile t-c"><span class="n">1.22</span><span class="l">PF · H1+M5 core</span>
+        <span class="s">560 trades, 12.4 mo · t = 1.55</span></div>
+      <div class="tile t-b"><span class="n">±$0</span><span class="l">Intrabar bracket</span>
+        <span class="s">Was ±$390 in V4</span></div>
+      <div class="tile t-d"><span class="n">10/10</span><span class="l">V4 findings fixed</span>
+        <span class="s">4 blocking, 6 medium/low</span></div>
+    </div>
+    <p class="note"><strong>The larger sample is the more trustworthy number.</strong> PF 1.22 at
+      +0.06 R per trade — the same order of edge V4 showed, but this time without a sign ambiguity,
+      without a split-half collapse, and with out-of-window agreement.</p>
+  </section>
+
+  <section>
+    <h2>The binding constraint: very little testable data</h2>
+    <p>V6 requires closed <strong>M1</strong> bars, and the supplied M1 file has a
+      <strong>56-day hole</strong> (2026-04-14 → 2026-06-09). Real coverage is 2026-04-06 → 04-14 plus
+      06-09 → 08-07: <strong>67 calendar days, 47 trading days, 101 trades.</strong> V4 was tested on
+      12.4 months and 380 trades. This is one-fifth the evidence.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Baseline — V6 shipped defaults</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Win</th><th class="num">Max DD</th></tr></thead>
+      <tbody>
+        <tr><td>Stop checked before trail</td><td class="num">101</td><td class="num up">+$446.27</td><td class="num">1.842</td><td class="num">58.4%</td><td class="num">$78.10</td></tr>
+        <tr><td>Trail advanced before stop</td><td class="num">101</td><td class="num up">+$446.27</td><td class="num">1.842</td><td class="num">58.4%</td><td class="num">$78.10</td></tr>
+      </tbody>
+    </table></div>
+    <p>t = 2.241, bootstrap 95% CI <strong>[+$66, +$842]</strong>, P(net ≤ 0) = 0.9%. Exits: 90 time
+      stop, 11 stop loss. Random-direction control over 200 runs puts the real result at the
+      <strong>100th percentile</strong> (control mean +$21, sd $178). Gross edge is
+      <strong>$4.68 per trade</strong> against V4's $1.10 — four times the margin over the same costs,
+      and results hold from $0.00 to $0.80 of spread.</p>
+  </section>
+
+  <section>
+    <h2>One shipped default looks fitted</h2>
+    <figure>
+      <div class="chart-hd">
+        <h3>Net P/L across the hold-time sweep, each series indexed to its own best</h3>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--s1)"></i>101 trades · 47 days</span>
+          <span><i class="swatch" style="background:var(--s2)"></i>560 trades · 12.4 months</span>
+        </div>
+      </div>
+      <div class="plot" id="p-hold"><div class="tip" id="t-hold"></div></div>
+      <figcaption>Indexed because the two samples differ in size, not to hide scale — the question is
+        <em>where each curve peaks</em>. On the short window the peak sits exactly on the shipped
+        <code>MaximumHoldingMinutes = 120</code>. On 12.4 months it moves to <b>150</b>, which is 42%
+        better there. <b>The 120 peak does not reproduce out of window</b> — treat it as a fitted
+        parameter, not a discovered horizon.</figcaption>
+    </figure>
+    <p>The stop loss looks different, and better. Its sweep is a <strong>broad plateau</strong> rather
+      than a spike — anything from 25 to 50 works, and it breaks down only below 20:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>InitialStopLossMovement</th><th class="num">10</th><th class="num">15</th><th class="num">20</th><th class="num">25</th><th class="num">30</th><th class="num">35</th><th class="num">40</th><th class="num">50</th></tr></thead>
+      <tbody><tr><td>Net</td><td class="num">$115</td><td class="num">$111</td><td class="num">$298</td><td class="num up">$446</td><td class="num up">$461</td><td class="num">$436</td><td class="num">$416</td><td class="num">$433</td></tr></tbody>
+    </table></div>
+    <p>A plateau with a cliff on one side is what a real effect looks like: the strategy needs room for
+      a two-hour hold, and V4's $15 was simply too tight. That default I would trust.</p>
+  </section>
+
+  <section>
+    <h2>The out-of-window test</h2>
+    <p>The M1 trigger can only be evaluated where M1 data exists — but the <strong>H1 regime gate and
+      M5 setup</strong> need only M5 and H1, which cover the full 12.4 months. Running that reduced
+      form gives a sample 5.5× larger, covering nine months the M1 file never saw.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Window</th><th class="num">Trades</th><th class="num">Net</th><th class="num">PF</th><th class="num">Win</th></tr></thead>
+      <tbody>
+        <tr><td>Full 12.4 months</td><td class="num">560</td><td class="num">+$801.70</td><td class="num">1.219</td><td class="num">47.5%</td></tr>
+        <tr class="hi"><td>Outside the M1 window</td><td class="num">396</td><td class="num">+$548.77</td><td class="num">1.216</td><td class="num">46.2%</td></tr>
+        <tr class="hi"><td>Inside the M1 window</td><td class="num">164</td><td class="num">+$252.93</td><td class="num">1.226</td><td class="num">50.6%</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Profit factor agrees to within 0.01 across windows that share no data.</strong> That is
+      the strongest single result in this report, and the thing V4 never produced.</p>
+    <figure>
+      <div class="chart-hd"><h3>H1 gate + M5 setup — cumulative P/L, 560 trades</h3></div>
+      <div class="plot" id="p-eq"><div class="tip" id="t-eq"></div></div>
+      <figcaption>The shaded band is the M1 window. Everything to its left is a period the M1-based
+        defaults could not have been tuned on, and the slope through it is the same.
+        <b>10 of 14 months positive</b>; worst −$204, best +$261.</figcaption>
+    </figure>
+    <p>The honest counterweight: on this larger sample the significance is <em>weaker</em>, not
+      stronger — t = <strong>1.545</strong>, 95% CI <strong>[−$191, +$1,848]</strong>, P(net ≤ 0) =
+      5.9%, random-control 95th percentile. Two samples, two readings: 101 trades at PF 1.84, or 560
+      trades at PF 1.22. Prefer the second.</p>
+    <p>Split-half on the 101 trades is also consistent, which V4's never was — first half +$277.49
+      (PF 1.850), second half +$168.78 (PF 1.829).</p>
+  </section>
+
+  <section>
+    <h2>Does the confidence score rank outcomes?</h2>
+    <p>V4's probability output was <em>inverted</em>. V6's hand-built score is right-signed, though weak:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Ranked by</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">corr</th></tr></thead>
+      <tbody>
+        <tr><td>V6 confidence</td><td class="num">+$4.41</td><td class="num">−$1.17</td><td class="num">+$5.24</td><td class="num up">+$9.20</td><td class="num">+0.065</td></tr>
+        <tr class="hi"><td>M1 trigger strength</td><td class="num">+$2.44</td><td class="num">−$0.05</td><td class="num">+$2.28</td><td class="num up">+$13.09</td><td class="num">+0.173</td></tr>
+        <tr><td>H1 gap</td><td class="num">+$2.18</td><td class="num">+$4.69</td><td class="num">+$0.92</td><td class="num up">+$9.97</td><td class="num">+0.114</td></tr>
+      </tbody>
+    </table></div>
+    <p>All three point the right way. On 101 trades none of it is conclusive, but it is the opposite of
+      V4's result rather than a repeat of it.</p>
+  </section>
+
+  <section>
+    <h2>The edge is the 120-minute horizon</h2>
+    <p>90 of 101 exits are the time stop; only 11 are stop losses. Adding a $30 take profit and removing
+      the time stop <strong>collapses the result to −$15</strong> (PF 0.988). So the strategy is:
+      <em>qualified trigger → hold about two hours → exit at market</em>. The $25 stop participates in
+      roughly one trade in nine.</p>
+    <p>That is a legitimate way to build a system, but it means the risk management is doing almost
+      nothing, and <strong>the entire edge rides on the one parameter the sweep above shows is
+      fitted</strong>.</p>
+  </section>
+
+  <section>
+    <h2>Audit — every V4 finding fixed</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>V4 finding</th><th>V6</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>H1 naked position after ECN fallback</td><td class="fixed">fixed</td><td><code>EnsureInitialStopProtection()</code> first in the tick, retries, closes after 5</td></tr>
+        <tr><td>H2 digit-dependent slippage</td><td class="fixed">fixed</td><td><code>SlippagePointsForBroker()</code>, movement ÷ Point</td></tr>
+        <tr><td>H3 per-tick history scans</td><td class="fixed">fixed</td><td>one-pass cache + invalidation; <code>ArraySort</code> dedupe; 1 Hz panel</td></tr>
+        <tr><td>H4 GlobalVariables never deleted</td><td class="fixed">fixed</td><td>in-memory state, <code>IsTesting()</code> branch, delete + orphan sweep</td></tr>
+        <tr><td>M2 ATR trail on forming bar</td><td class="fixed">fixed</td><td><code>iATR(…,1)</code></td></tr>
+        <tr><td>M3 stop + freeze summed</td><td class="fixed">fixed</td><td><code>MathMax</code></td></tr>
+        <tr><td>M4 silent validation failures</td><td class="fixed">fixed</td><td><code>InvalidInput(name, requirement)</code> everywhere</td></tr>
+        <tr><td>M5 no close retries</td><td class="fixed">fixed</td><td>3 attempts + retryable-error list + pending retry</td></tr>
+        <tr><td>L7 silent max-lot cap</td><td class="fixed">fixed</td><td>prints a warning</td></tr>
+        <tr><td>L8 modal alert by default</td><td class="fixed">fixed</td><td>default false</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Audit — new findings</h2>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">V6-1</span><h3>The staleness guard was removed</h3></div>
+      <p>V4 rejected any regime bar older than 12 hours. V6's <code>GVLastFullyClosedShift</code>
+        (196–208) checks only that the bar has closed — <strong>there is no upper bound on age</strong>.</p>
+      <p>Measured on your data: H1 regime bars up to <strong>54 hours old</strong>, 530 valid bars
+        affected, and <strong>6 qualified signals fired on H1 data more than 12 hours stale</strong>.
+        After a weekend or a feed outage the EA trades Monday off Friday's H1 regime. P/L impact is
+        small — restoring a 12-hour bound gives +$461.88 against +$446.27 — but that is a six-signal
+        sample, not a reason to leave it out.</p>
+<pre>if(decisionTime-barClose &gt; maxAgeSeconds) return(-1);   // 3*tf*60 for M5, 12*3600 for H1</pre>
+    </article>
+
+    <article class="find f-med">
+      <div class="hd"><span class="tag">V6-2</span><h3><code>atrM5Slow</code> is dead but still gates every signal</h3></div>
+      <p>Line 225 computes <code>GVATR(M5,48,closedM5)</code> and line 228 rejects the whole
+        calculation if it is ≤ 0. <strong>The value is never used again</strong> — in V4 it fed the
+        <code>volatilityRatio</code> feature, which no longer exists. Since <code>GVATR</code> returns 0
+        if <em>any</em> of 48 true ranges is zero, a single flat M5 bar silently kills the signal for no
+        reason. Delete it, or use it.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-3</span><h3><code>SendEntry</code> returns false after a successful open</h3></div>
+      <p>Two paths (1063–1069, 1084–1092) return <code>false</code> when the order <em>is already
+        open</em>, and <code>g_lastEntryTime</code> is never reached. Nothing breaks — the cache is
+        invalidated at 1061 and <code>FindManagedTicket()</code> blocks re-entry — but a caller cannot
+        distinguish "no position" from "position open, protection pending".</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-4</span><h3><code>MaximumM1ChaseATR</code> is measured in M5 ATR</h3></div>
+      <p>Line 314 divides by <code>atrM5</code>, not <code>atrM1</code>. Someone setting "1 ATR of
+        chase" gets roughly 5× more tolerance than they expect. The behaviour is defensible; the name
+        is not.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-5</span><h3><code>GV_STATE_EXHAUSTING</code> is never assigned</h3></div>
+      <p>Defined at 24, rendered at 129, tested at 1317 and 1468 — but no code path sets it. Half the
+        velocity-exit condition is dead, so <code>UseVelocityExit</code> is weaker than it reads.</p>
+    </article>
+
+    <article class="find f-low">
+      <div class="hd"><span class="tag">V6-6</span><h3>Two sources of truth for bar requirements</h3></div>
+      <p><code>GV_REQUIRED_M5_BARS 80</code> and <code>GV_REQUIRED_H1_BARS 40</code> are checked at
+        213–214, then <code>GVLastFullyClosedShift</code> is called with hard-coded <code>79</code> and
+        <code>30</code> at 220–221. Four numbers, two of them silently authoritative. (V6-7:
+        <code>result.velocityM15</code> holds an M1 value — leftover field name.)</p>
+    </article>
+  </section>
+
+  <section>
+    <h2>What to do next</h2>
+    <ol>
+      <li><strong>Answer the provenance question.</strong> Were the thresholds and the SL/hold defaults
+        chosen on this gold history? That determines whether §4 is validation or in-sample fitting, and
+        it moves the conclusion further than any further computation would.</li>
+      <li><strong>Get more M1 data.</strong> 47 trading days cannot settle this. Two years of M1 would
+        let the full stack be tested properly. Nothing substitutes for it.</li>
+      <li><strong>Re-pick the hold time on the long sample, or stop treating it as a constant.</strong>
+        90–150 all work on the 560-trade core; choose from that range on evidence, or make it scale with
+        ATR.</li>
+      <li><strong>Fix V6-1 and V6-2 before live.</strong> Neither loses money today; both are
+        correctness issues that will bite on a Monday or a bad feed.</li>
+      <li><strong>Do not re-enable trailing without re-measuring.</strong> Its absence is why this
+        backtest has a determinate answer at all — and on this sample it cut net from $446 to $312
+        anyway.</li>
+    </ol>
+  </section>
+
+  <footer class="foot">
+    <span>Independent Python port; not MetaTrader's Strategy Tester. File not compiled. Spread modelled at $0.30.</span>
+    <span>V4 harness reused unchanged for execution and management, so the two versions are measured the same way.</span>
+  </footer>
+</div>
+
+<script>
+/*DATA*/
+(function(){
+  const css=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  const NS="http://www.w3.org/2000/svg";
+  const el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  const money=v=>(v<0?"−$":"+$")+Math.abs(v).toFixed(0);
+
+  function svgIn(host,W,H){host.querySelectorAll("svg").forEach(s=>s.remove());
+    const s=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});host.appendChild(s);return s;}
+
+  function holdChart(){
+    const host=document.getElementById("p-hold"),tip=document.getElementById("t-hold");
+    const W=760,H=300,L=52,R=22,T=18,B=44;
+    const svg=svgIn(host,W,H);
+    const xs=DATA.holds, a=DATA.hold_m1, b=DATA.hold_core;
+    const na=Math.max(...a), nb=Math.max(...b);
+    const A=a.map(v=>100*v/na), Bv=b.map(v=>100*v/nb);
+    const x0=Math.min(...xs),x1=Math.max(...xs);
+    const y0=Math.min(0,...A,...Bv), y1=105;
+    const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    [0,25,50,75,100].forEach(v=>{
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-9,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")});t.textContent=v+"%";svg.appendChild(t);});
+    xs.forEach(v=>{const t=el("text",{x:X(v),y:H-22,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":11,"font-family":css("--mono")});t.textContent=v;svg.appendChild(t);});
+    const lab=el("text",{x:(L+W-R)/2,y:H-5,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":10.5,"font-family":css("--mono")});
+    lab.textContent="MaximumHoldingMinutes";svg.appendChild(lab);
+    [[Bv,"--s2"],[A,"--s1"]].forEach(([ser,c])=>{
+      svg.appendChild(el("path",{d:ser.map((v,i)=>(i?"L":"M")+X(xs[i]).toFixed(1)+" "+Y(v).toFixed(1)).join(" "),
+        fill:"none",stroke:css(c),"stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));});
+    [[A,"--s1",a,"101 trades",-10,"end"],[Bv,"--s2",b,"560 trades",10,"start"]].forEach(([ser,c,raw,nm,dx,anc])=>{
+      const pk=ser.indexOf(100);
+      svg.appendChild(el("circle",{cx:X(xs[pk]),cy:Y(100),r:5,fill:css(c),
+        stroke:css("--surface"),"stroke-width":2}));
+      const t=el("text",{x:X(xs[pk])+dx,y:Y(100)-9,"text-anchor":anc,fill:css(c),
+        "font-size":11.5,"font-weight":600,"font-family":css("--mono")});
+      t.textContent="peak "+xs[pk];svg.appendChild(t);
+      ser.forEach((v,i)=>{
+        const dot=el("circle",{cx:X(xs[i]),cy:Y(v),r:9,fill:"transparent"});
+        dot.style.cursor="crosshair";
+        dot.addEventListener("mouseenter",()=>{
+          tip.innerHTML=`<span class="k">${nm} · hold ${xs[i]} min</span><br>net <b>${money(raw[i])}</b><br><span class="k">${v.toFixed(0)}% of its best</span>`;
+          tip.style.opacity=1;const rc=host.getBoundingClientRect();
+          tip.style.left=Math.min(Math.max(X(xs[i])/W*rc.width-70,4),rc.width-150)+"px";
+          tip.style.top=Math.max(Y(v)/H*rc.height-72,2)+"px";});
+        dot.addEventListener("mouseleave",()=>tip.style.opacity=0);
+        svg.appendChild(dot);});});
+  }
+
+  function eqChart(){
+    const host=document.getElementById("p-eq"),tip=document.getElementById("t-eq");
+    const W=760,H=280,L=56,R=26,T=16,B=36;
+    const svg=svgIn(host,W,H);
+    const d=DATA.core_eq;
+    const xs=d.map(p=>p[0]),ys=d.map(p=>p[1]);
+    const x0=Math.min(...xs),x1=Math.max(...xs);
+    let y0=Math.min(0,...ys),y1=Math.max(...ys); const pad=(y1-y0)*0.1; y0-=pad;y1+=pad;
+    const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+    const w0=Math.max(DATA.m1_window[0],x0), w1=Math.min(DATA.m1_window[1],x1);
+    svg.appendChild(el("rect",{x:X(w0),y:T,width:Math.max(0,X(w1)-X(w0)),height:H-T-B,
+      fill:css("--s2"),opacity:.09}));
+    const wl=el("text",{x:(X(w0)+X(w1))/2,y:T+13,"text-anchor":"middle",fill:css("--s2"),
+      "font-size":10,"font-family":css("--mono")});wl.textContent="M1 window";svg.appendChild(wl);
+    for(let v=0;v<=y1;v+=250){
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),
+        stroke:v===0?css("--line"):css("--grid"),"stroke-width":v===0?1.5:1}));
+      const t=el("text",{x:L-9,y:Y(v)+4,"text-anchor":"end",fill:css("--ink-3"),
+        "font-size":11,"font-family":css("--mono")});t.textContent=(v>0?"+":"")+v;svg.appendChild(t);}
+    let cur="";const ticks=[];
+    d.forEach(p=>{const dt=new Date(p[0]*1000);const k=dt.getUTCFullYear()+"-"+String(dt.getUTCMonth()+1).padStart(2,"0");
+      if(k!==cur){if(dt.getUTCMonth()%3===0)ticks.push([p[0],k]);cur=k;}});
+    ticks.forEach(([tt,k])=>{const t=el("text",{x:X(tt),y:H-12,"text-anchor":"middle",fill:css("--ink-3"),
+      "font-size":11,"font-family":css("--mono")});t.textContent=k;svg.appendChild(t);});
+    svg.appendChild(el("path",{d:d.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" "),
+      fill:"none",stroke:css("--s2"),"stroke-width":2,"stroke-linejoin":"round"}));
+    const last=d[d.length-1];
+    svg.appendChild(el("circle",{cx:X(last[0]),cy:Y(last[1]),r:4,fill:css("--s2"),
+      stroke:css("--surface"),"stroke-width":2}));
+    const lt=el("text",{x:X(last[0])-6,y:Y(last[1])-11,"text-anchor":"end",fill:css("--s2"),
+      "font-size":12,"font-weight":600,"font-family":css("--mono")});
+    lt.textContent="+$802";svg.appendChild(lt);
+    const cross=el("line",{y1:T,y2:H-B,stroke:css("--ink-3"),"stroke-width":1,"stroke-dasharray":"3 3",opacity:0});
+    svg.appendChild(cross);
+    const dot=el("circle",{r:4,fill:css("--s2"),stroke:css("--surface"),"stroke-width":2,opacity:0});
+    svg.appendChild(dot);
+    const hit=el("rect",{x:L,y:T,width:W-L-R,height:H-T-B,fill:"transparent"});svg.appendChild(hit);
+    function mv(ev){const rc=host.getBoundingClientRect();
+      const cx=((ev.touches?ev.touches[0].clientX:ev.clientX)-rc.left)/rc.width*W;
+      if(cx<L||cx>W-R){lv();return;}
+      const t=x0+(cx-L)/(W-L-R)*(x1-x0);
+      let lo=0,hi=d.length-1;while(lo<hi){const m=(lo+hi)>>1;if(d[m][0]<t)lo=m+1;else hi=m;}
+      const p=d[lo];
+      cross.setAttribute("x1",X(p[0]));cross.setAttribute("x2",X(p[0]));cross.setAttribute("opacity",1);
+      dot.setAttribute("cx",X(p[0]));dot.setAttribute("cy",Y(p[1]));dot.setAttribute("opacity",1);
+      tip.innerHTML=`<span class="k">${new Date(p[0]*1000).toISOString().slice(0,10)}</span><br>cumulative <b>${money(p[1])}</b>`;
+      tip.style.opacity=1;
+      tip.style.left=Math.min(Math.max(X(p[0])/W*rc.width+12,4),rc.width-140)+"px";
+      tip.style.top="10px";}
+    function lv(){tip.style.opacity=0;cross.setAttribute("opacity",0);dot.setAttribute("opacity",0);}
+    host.addEventListener("mousemove",mv);host.addEventListener("mouseleave",lv);
+    host.addEventListener("touchmove",mv,{passive:true});host.addEventListener("touchend",lv);
+  }
+
+  function draw(){holdChart();eqChart();}
+  draw();
+  let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(draw,150);});
+  matchMedia("(prefers-color-scheme:dark)").addEventListener("change",draw);
+  new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+})();
+</script>
