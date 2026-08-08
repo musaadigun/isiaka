@@ -8,7 +8,7 @@
 
 ## Verdict
 
-The signal side is honest work: no lookahead, no repainting, no external dependencies, and two genuinely careful pieces of lot-sizing code. The execution side has one defect that can leave a live position without a stop loss, and one that will make the EA unusable in the Strategy Tester. The bigger finding is not a bug at all — **the model is one feature wearing eighteen features' clothing**, and at shipped defaults six of its eight advertised filters do nothing.
+The signal side is honest work: no lookahead, no repainting, no external dependencies, and two genuinely careful pieces of lot-sizing code. The execution side has one defect that can leave a live position without a stop loss, and one that will make the EA unusable in the Strategy Tester. The bigger finding is not a bug at all — **the model is one feature wearing eighteen features' clothing**, two of its eight advertised filters are inert, and a backtest on 12.4 months of this broker's own gold data shows its probability output does not rank outcomes (`backtest/BACKTEST.md`).
 
 Do not run this on a live account until H1 and H2 are fixed.
 
