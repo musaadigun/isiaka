@@ -64,6 +64,21 @@
 //|   * Shadow trades never recorded their entry spread.               |
 //|   * A second order sharing an engine magic was silently orphaned.  |
 //|   * Per-trade state was left stale on the slot after a close.      |
+//|   * ENGINE B WAS UNREACHABLE. OnNewBar gated the whole dispatch on |
+//|     BuildSession(), which is false for the entire fade window by   |
+//|     construction, so the fade fired on 0 of its 28 daily bars and  |
+//|     the EA was a one-engine system. The range is an input to the   |
+//|     breakout alone and now gates only that. A late-session entry   |
+//|     guard came with it - a fade opening at 06:50 previously had a  |
+//|     ten-minute leash before its own deadline.                      |
+//|                                                                    |
+//| EXPECTED FREQUENCY - estimated from structure, NOT measured        |
+//|   Breakout needs range/ADR inside [0.12, 0.55] AND a break during  |
+//|   07:00-11:00. Fade needs a 2.2 ATR excursion off the SMA on a day |
+//|   that has not already run. Together I estimate roughly two days   |
+//|   in three, NOT every day. The journal's date column is the only   |
+//|   thing that will actually tell you - check it before trusting     |
+//|   any frequency claim, including this one.                         |
 //+------------------------------------------------------------------+
 #property strict
 #property description "EURUSD intraday adaptive EA - London breakout + Asian fade"
@@ -85,6 +100,7 @@ input int    AsianEndHour          = 7;       // range window closes / London be
 input int    BreakoutEndHour       = 11;      // no new breakout entries after this
 input int    FlatByHour            = 16;      // all positions closed by this hour
 input int    MinAsianBars          = 20;      // of 28 expected M15 bars; guards gaps/holidays
+input int    MinMinutesBeforeFlat  = 60;      // refuse entries with no room left to work
 //==================== ENGINE A - LONDON BREAKOUT ====================
 input bool   UseBreakout           = true;
 input double MaxRangeToAdr         = 0.55;    // range must be TIGHT vs 14d ADR (load-bearing)
@@ -284,6 +300,8 @@ bool BuildSession()
    return(true);
 }
 
+//| True only when the cached range belongs to the CURRENT GMT day.
+bool   SessionFresh() { return(g_rangeOk && g_sessDay == GmtDay(ToGmt(TimeCurrent()))); }
 double RangePips() { return((g_rangeHi - g_rangeLo)/g_pip); }
 double AdrPips()   { return(g_adr/g_pip); }
 
@@ -368,19 +386,22 @@ void OnNewBar()
    UpdateEquityPeak();
 
    if(Halted()) return;
-   if(!BuildSession()) return;
 
    int hour = GmtHour();
 
-   if(UseBreakout && hour >= AsianEndHour && hour < BreakoutEndHour)
-   {
-      int d = BreakoutSignal();
-      if(d != 0) HandleSignal(ENG_BREAK, d);
-   }
+   // The fade runs DURING the Asian window and needs no range - it is
+   // banded off an SMA. It must not be gated on BuildSession(), which is
+   // false for that whole window by construction.
    if(UseFade && hour >= AsianStartHour && hour < AsianEndHour)
    {
       int d = FadeSignal();
       if(d != 0) HandleSignal(ENG_FADE, d);
+   }
+   // The breakout needs the completed range, so it alone is gated on it.
+   if(UseBreakout && hour >= AsianEndHour && hour < BreakoutEndHour && BuildSession())
+   {
+      int d = BreakoutSignal();
+      if(d != 0) HandleSignal(ENG_BREAK, d);
    }
 }
 
@@ -488,6 +509,10 @@ bool LevelsSane(int dir, double entry, double stop, double target)
 
 void HandleSignal(int eng, int dir)
 {
+   // a trade needs room to work: refuse one its own session deadline
+   // would flatten almost immediately
+   if(FlatDeadline(eng, TimeCurrent()) - TimeCurrent() < MinMinutesBeforeFlat*60) return;
+
    double entry, stop, target;
    BuildLevels(eng, dir, entry, stop, target);
    if(!LevelsSane(dir, entry, stop, target)) return;
@@ -1072,8 +1097,9 @@ void JournalRow(int eng, string mode, int dir, double lots, double entry, double
       DoubleToString(grossR,3), DoubleToString(netR,3),
       DoubleToString(SGet("EWMA_L_"+idx,0),3),
       DoubleToString(SGet("EWMA_S_"+idx,0),3),
-      DoubleToString(RangePips(),1), DoubleToString(AdrPips(),1),
-      DoubleToString(AdrPips()>0 ? RangePips()/AdrPips() : 0, 3),
+      SessionFresh() ? DoubleToString(RangePips(),1) : "0",
+      DoubleToString(AdrPips(),1),
+      SessionFresh() && AdrPips()>0 ? DoubleToString(RangePips()/AdrPips(),3) : "0",
       reason);
    FileClose(fh);
 }
