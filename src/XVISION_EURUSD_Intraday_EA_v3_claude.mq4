@@ -184,6 +184,7 @@ bool     k_dirty = false;
 datetime g_sessDay   = 0;
 double   g_rangeHi   = 0, g_rangeLo = 0, g_adr = 0;
 bool     g_rangeOk   = false;
+int      g_asianBars = 0;
 
 //+------------------------------------------------------------------+
 //|                        STATE PERSISTENCE                         |
@@ -298,6 +299,7 @@ bool BuildSession()
    g_rangeOk = false;
 
    int count = iStart - iEnd + 1;
+   g_asianBars = count;
    if(count < MinAsianBars)
    {
       Print("claude-v3: only ", count, " M15 bars in today's Asian window (need ",
@@ -351,6 +353,11 @@ int OnInit()
    RecoverShadows();
 
    if(SGet("PEAK_EQUITY", 0) <= 0) SSet("PEAK_EQUITY", AccountEquity());
+
+   if(iBars(NULL,TF) < FadeMidPeriod+120)
+      Print("claude-v3: ONLY ", iBars(NULL,TF), " M15 BARS AVAILABLE (need ",
+            FadeMidPeriod+120, "). The EA runs on M15 regardless of the chart it sits on. ",
+            "Open a EURUSD M15 chart once so the terminal downloads history, then reattach.");
 
    // B1 fix: seed the bar clock so loading does NOT look like a new bar
    g_lastBar = iTime(NULL, TF, 0);
@@ -1154,170 +1161,238 @@ string StateName(int s){ return(s==0 ? "FULL" : (s==1 ? "HALF" : "STOOD DOWN"));
 
 //+------------------------------------------------------------------+
 //|                     ON-CHART PANEL                               |
-//| Comment() paints transparent text that fights the candles for    |
-//| legibility. This builds the panel from chart objects instead: an |
-//| opaque filled rectangle with labels on top, so it stays readable |
-//| whatever the price action does underneath it.                    |
+//| Operational, not analytical. The top line always answers "what is |
+//| it doing and what is it waiting for". Every row is one monospaced |
+//| label with padded columns, so nothing can ever overlap.           |
 //+------------------------------------------------------------------+
 #define PFX      "xv3c_"
 #define PAN_X    8
 #define PAN_Y    18
-#define PAN_W    352
-#define ROW_H    13
-#define TITLE_H  21
-#define NROWS    16
+#define PAN_W    396
+#define ROW_H    14
+#define TITLE_H  22
+#define NROWS    15
 
-#define C_BG     C'22,26,34'
-#define C_TITLE  C'33,41,56'
-#define C_BORDER C'62,72,90'
-#define C_HEAD   C'236,241,248'
-#define C_DIM    C'130,142,162'
-#define C_VAL    C'220,227,238'
-#define C_GOOD   C'86,200,130'
-#define C_BAD    C'232,96,96'
-#define C_WARN   C'233,176,72'
-#define C_LIVE   C'96,170,255'
+#define C_BG     C'18,22,30'
+#define C_TITLE  C'30,38,52'
+#define C_BORDER C'70,82,102'
+#define C_HEAD   C'238,243,250'
+#define C_DIM    C'126,138,158'
+#define C_VAL    C'223,230,240'
+#define C_GOOD   C'80,205,132'
+#define C_BAD    C'238,92,92'
+#define C_WARN   C'240,180,70'
+#define C_LIVE   C'92,168,255'
 
-void PBox(string id, int x, int y, int w, int h, color bg, color brd)
+void PBox(string id,int x,int y,int w,int h,color bg,color brd)
 {
-   string nm = PFX+id;
-   if(ObjectFind(0, nm) < 0)
+   string nm=PFX+id;
+   if(ObjectFind(0,nm)<0)
    {
-      ObjectCreate(0, nm, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, nm, OBJPROP_CORNER,      CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, nm, OBJPROP_BACK,        false);
-      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE,  false);
-      ObjectSetInteger(0, nm, OBJPROP_HIDDEN,      true);
-      ObjectSetInteger(0, nm, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectCreate(0,nm,OBJ_RECTANGLE_LABEL,0,0,0);
+      ObjectSetInteger(0,nm,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+      ObjectSetInteger(0,nm,OBJPROP_BACK,false);
+      ObjectSetInteger(0,nm,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,nm,OBJPROP_HIDDEN,true);
+      ObjectSetInteger(0,nm,OBJPROP_BORDER_TYPE,BORDER_FLAT);
    }
-   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, nm, OBJPROP_XSIZE,     w);
-   ObjectSetInteger(0, nm, OBJPROP_YSIZE,     h);
-   ObjectSetInteger(0, nm, OBJPROP_BGCOLOR,   bg);
-   ObjectSetInteger(0, nm, OBJPROP_COLOR,     brd);
+   ObjectSetInteger(0,nm,OBJPROP_XDISTANCE,x); ObjectSetInteger(0,nm,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,nm,OBJPROP_XSIZE,w);     ObjectSetInteger(0,nm,OBJPROP_YSIZE,h);
+   ObjectSetInteger(0,nm,OBJPROP_BGCOLOR,bg);  ObjectSetInteger(0,nm,OBJPROP_COLOR,brd);
 }
 
-void PTxt(string id, int x, int y, string txt, color c, int size=8)
+void PTxt(string id,int x,int y,string txt,color c,int size=8)
 {
-   string nm = PFX+id;
-   if(ObjectFind(0, nm) < 0)
+   string nm=PFX+id;
+   if(ObjectFind(0,nm)<0)
    {
-      ObjectCreate(0, nm, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, nm, OBJPROP_CORNER,     CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, nm, OBJPROP_BACK,       false);
-      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, nm, OBJPROP_HIDDEN,     true);
-      ObjectSetString (0, nm, OBJPROP_FONT,       "Consolas");
+      ObjectCreate(0,nm,OBJ_LABEL,0,0,0);
+      ObjectSetInteger(0,nm,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+      ObjectSetInteger(0,nm,OBJPROP_BACK,false);
+      ObjectSetInteger(0,nm,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,nm,OBJPROP_HIDDEN,true);
+      ObjectSetString (0,nm,OBJPROP_FONT,"Consolas");
    }
-   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, nm, OBJPROP_FONTSIZE,  size);
-   ObjectSetInteger(0, nm, OBJPROP_COLOR,     c);
-   ObjectSetString (0, nm, OBJPROP_TEXT,      txt);
+   ObjectSetInteger(0,nm,OBJPROP_XDISTANCE,x); ObjectSetInteger(0,nm,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,nm,OBJPROP_FONTSIZE,size);
+   ObjectSetInteger(0,nm,OBJPROP_COLOR,c);     ObjectSetString(0,nm,OBJPROP_TEXT,txt);
 }
 
-void PRow(int row, string left, string right, color c)
+//| One label per row with a padded key column. Two positioned labels
+//| per row is what let the columns collide at larger font scales.
+string Pad(string s,int n) { while(StringLen(s)<n) s=s+" "; return(s); }
+
+void PRow(int row,string key,string val,color c)
 {
-   int y = PAN_Y + TITLE_H + 5 + row*ROW_H;
-   PTxt("l"+IntegerToString(row), PAN_X+10,  y, left,  C_DIM);
-   PTxt("v"+IntegerToString(row), PAN_X+112, y, right, c);
+   PTxt("r"+IntegerToString(row), PAN_X+10, PAN_Y+TITLE_H+5+row*ROW_H,
+        Pad(key,10)+val, c);
 }
 
 void PanelDestroy()
 {
-   for(int i=ObjectsTotal(0,-1,-1)-1; i>=0; i--)
+   for(int i=ObjectsTotal(0,-1,-1)-1;i>=0;i--)
    {
-      string nm = ObjectName(0, i);
-      if(StringFind(nm, PFX) == 0) ObjectDelete(0, nm);
+      string nm=ObjectName(0,i);
+      if(StringFind(nm,PFX)==0) ObjectDelete(0,nm);
    }
    ChartRedraw();
 }
 
 string Pad2(int v) { return(v<10 ? "0"+IntegerToString(v) : IntegerToString(v)); }
 
+bool DataReady() { return(iBars(NULL,TF) >= FadeMidPeriod+120); }
+
+//| Minutes until a GMT hour boundary, for "opens in 2h14m".
+string Until(int gmtHour)
+{
+   datetime g=ToGmt(TimeCurrent());
+   datetime t=GmtDay(g)+gmtHour*3600;
+   if(t<=g) t+=86400;
+   int m=(int)((t-g)/60);
+   return(StringConcatenate(IntegerToString(m/60),"h",Pad2(m%60),"m"));
+}
+
+//+------------------------------------------------------------------+
+//| The headline. One sentence: what it is doing, what it waits for. |
+//+------------------------------------------------------------------+
+string ActionLine(color &c)
+{
+   int hour=GmtHour();
+   if(!DataReady())
+   { c=C_BAD; return("NO M15 DATA - open a EURUSD M15 chart, then reattach"); }
+   if(Halted())
+   { c=C_BAD; return("HALTED - drawdown breaker tripped, set ResetBreaker"); }
+   if(DayBlockedQuiet())
+   { c=C_BAD; return("STOPPED FOR TODAY - risk limit hit, resumes "+Pad2(0)+":00 GMT"); }
+
+   for(int e=0;e<NENG;e++)
+      if(g_ticket[e]>=0)
+      { c=C_LIVE; return("IN TRADE - managing "+EngName(e)+", flat by "+Pad2(EngineFlatHour(e))+":00"); }
+
+   if(hour>=AsianStartHour && hour<AsianEndHour)
+   { c=C_GOOD; return("WATCHING - Asian fade, stretch off the mean"); }
+
+   if(hour>=AsianEndHour && hour<BreakoutEndHour)
+   {
+      if(!SessionFresh())
+      { c=C_WARN; return("NO SETUP - only "+IntegerToString(g_asianBars)+" of 28 Asian bars today"); }
+      double ratio=(AdrPips()>0)?RangePips()/AdrPips():0;
+      if(ratio>MaxRangeToAdr)
+      { c=C_DIM;  return("NO SETUP - Asian range too wide ("+DoubleToString(ratio,2)+" ADR), stood aside"); }
+      if(ratio<MinRangeToAdr)
+      { c=C_DIM;  return("NO SETUP - Asian range too small ("+DoubleToString(ratio,2)+" ADR)"); }
+      if(SGet("DAY_DONE_0",0)>0.5)
+      { c=C_DIM;  return("DONE - breakout already taken today"); }
+      c=C_GOOD;   return("ARMED - waiting for a close outside the Asian range");
+   }
+
+   if(hour<AsianStartHour || hour>=BreakoutEndHour)
+   {
+      if(hour<AsianStartHour||hour>=FlatByHour)
+      { c=C_DIM; return("STANDBY - next window "+Pad2(AsianStartHour)+":00 GMT in "+Until(AsianStartHour)); }
+      c=C_DIM; return("STANDBY - entries closed for today, next "+Pad2(AsianStartHour)+":00 GMT in "+Until(AsianStartHour));
+   }
+   c=C_DIM; return("STANDBY");
+}
+
 void Panel()
 {
    if(IsOptimization()) return;
 
-   PBox("bg",    PAN_X, PAN_Y, PAN_W, TITLE_H + NROWS*ROW_H + 12, C_BG, C_BORDER);
-   PBox("title", PAN_X, PAN_Y, PAN_W, TITLE_H, C_TITLE, C_BORDER);
+   PBox("bg",   PAN_X,PAN_Y,PAN_W,TITLE_H+NROWS*ROW_H+12,C_BG,C_BORDER);
+   PBox("ttl",  PAN_X,PAN_Y,PAN_W,TITLE_H,C_TITLE,C_BORDER);
 
-   string st  = Halted() ? "HALTED" : (SignalOnly ? "SIGNAL-ONLY" : "LIVE");
-   color  stc = Halted() ? C_BAD    : (SignalOnly ? C_WARN        : C_LIVE);
-   PTxt("t1", PAN_X+10,     PAN_Y+4, "XVISION EURUSD  v3 (claude)", C_HEAD, 9);
-   PTxt("t2", PAN_X+PAN_W-92, PAN_Y+4, st, stc, 9);
+   string md = Halted()?"HALTED":(SignalOnly?"SIGNAL-ONLY":"LIVE");
+   color  mc = Halted()?C_BAD:(SignalOnly?C_WARN:C_LIVE);
+   PTxt("t1",PAN_X+10,PAN_Y+5,"XVISION EURUSD v3",C_HEAD,9);
+   PTxt("t2",PAN_X+PAN_W-96,PAN_Y+5,md,mc,9);
 
-   int r = 0;
-   PRow(r++, "Session", StringConcatenate("GMT ", Pad2(GmtHour()), ":00    offset ",
-             (g_offsetSec>=0?"+":""), IntegerToString(g_offsetSec/3600), "h"), C_VAL);
+   color ac; string act=ActionLine(ac);
+   int r=0;
+   PRow(r++,"ACTION",act,ac);
+   PRow(r++,"","",C_DIM);
 
-   double sp = SpreadPips();
-   PRow(r++, "Spread", StringConcatenate(DoubleToString(sp,2), " pips    cap ",
-             DoubleToString(MaxSpreadPips,2)), sp > MaxSpreadPips ? C_BAD : C_VAL);
+   // ---- open position, in the units a trader actually reads
+   int le=-1;
+   for(int e=0;e<NENG;e++) if(g_ticket[e]>=0) { le=e; break; }
+   if(le>=0 && OrderSelect(g_ticket[le],SELECT_BY_TICKET))
+   {
+      int    d    = (OrderType()==OP_BUY)?1:-1;
+      double now  = (d>0)?Bid:Ask;
+      double pips = (now-OrderOpenPrice())*d/g_pip;
+      double mny  = OrderProfit()+OrderCommission()+OrderSwap();
+      double rr   = (g_risk[le]>0)?(now-OrderOpenPrice())*d/g_risk[le]:0;
+      PRow(r++,"POSITION",StringConcatenate((d>0?"BUY  ":"SELL "),
+           DoubleToString(OrderLots(),2)," lots @ ",DoubleToString(OrderOpenPrice(),Digits)),C_VAL);
+      PRow(r++,"P/L",StringConcatenate((pips>=0?"+":""),DoubleToString(pips,1)," pips   ",
+           (mny>=0?"+":""),DoubleToString(mny,2),"   ",(rr>=0?"+":""),DoubleToString(rr,2),"R"),
+           mny>=0?C_GOOD:C_BAD);
+      PRow(r++,"EXIT",StringConcatenate("SL ",DoubleToString(OrderStopLoss(),Digits),
+           "   TP ",DoubleToString(OrderTakeProfit(),Digits),
+           "   flat ",Pad2(EngineFlatHour(le)),":00"),C_DIM);
+   }
+   else
+   {
+      PRow(r++,"POSITION","none",C_DIM);
+      PRow(r++,"","",C_DIM);
+      PRow(r++,"","",C_DIM);
+   }
+   PRow(r++,"","",C_DIM);
 
-   string rng; color rc;
+   // ---- the setup and its actual trigger prices
    if(SessionFresh())
    {
-      double ratio = (AdrPips()>0) ? RangePips()/AdrPips() : 0;
-      bool armed = (ratio <= MaxRangeToAdr && ratio >= MinRangeToAdr);
-      rng = StringConcatenate(DoubleToString(RangePips(),1), "p = ",
-            DoubleToString(ratio,2), " ADR   ", armed ? "ARMED" : "no setup");
-      rc  = armed ? C_GOOD : C_DIM;
+      double ratio=(AdrPips()>0)?RangePips()/AdrPips():0;
+      bool armed=(ratio<=MaxRangeToAdr && ratio>=MinRangeToAdr);
+      PRow(r++,"RANGE",StringConcatenate(DoubleToString(RangePips(),1),"p  ",
+           DoubleToString(ratio,2)," ADR   ",armed?"tradeable":"stood aside"),
+           armed?C_GOOD:C_DIM);
+      double buf=BreakBufferAtr*iATR(NULL,TF,14,1);
+      if(armed && GmtHour()<BreakoutEndHour)
+         PRow(r++,"TRIGGER",StringConcatenate("BUY above ",DoubleToString(g_rangeHi+buf,Digits),
+              "   SELL below ",DoubleToString(g_rangeLo-buf,Digits)),C_VAL);
+      else PRow(r++,"","",C_DIM);
    }
-   else if(GmtHour() < AsianEndHour)
-   { rng = StringConcatenate("forming, closes ", Pad2(AsianEndHour), ":00 GMT"); rc = C_DIM; }
    else
-   { rng = "unavailable - too few bars today"; rc = C_WARN; }
-   PRow(r++, "Asian range", rng, rc);
-
-   PRow(r++, "", "", C_DIM);
-
-   for(int e=0; e<NENG; e++)
    {
-      string idx = IntegerToString(e);
-      int    es  = EngineState(e);
-      color  ec  = (es==0) ? C_GOOD : (es==1 ? C_WARN : C_BAD);
-      string tag = (g_ticket[e]>=0) ? "   OPEN #"+IntegerToString(g_ticket[e])
-                                    : (s_on[e] ? "   shadow open" : "");
-      PRow(r++, EngName(e), StateName(es)+tag, ec);
-
-      double nl = SGet("SUM_L_"+idx,0), ns = SGet("SUM_S_"+idx,0);
-      PRow(r++, "  live", StringConcatenate(DoubleToString(SGet("CNT_L_"+idx,0),0),
-                " tr   ewma ", DoubleToString(SGet("EWMA_L_"+idx,0),3),
-                "   net ", DoubleToString(nl,2), "R"),
-                nl>0 ? C_GOOD : (nl<0 ? C_BAD : C_VAL));
-      PRow(r++, "  shadow", StringConcatenate(DoubleToString(SGet("CNT_S_"+idx,0),0),
-                " tr   ewma ", DoubleToString(SGet("EWMA_S_"+idx,0),3),
-                "   net ", DoubleToString(ns,2), "R"),
-                ns>0 ? C_GOOD : (ns<0 ? C_BAD : C_VAL));
+      PRow(r++,"RANGE",GmtHour()<AsianEndHour
+           ? StringConcatenate("forming, closes ",Pad2(AsianEndHour),":00 GMT")
+           : "not available today",C_DIM);
+      PRow(r++,"","",C_DIM);
    }
+   PRow(r++,"","",C_DIM);
 
-   PRow(r++, "", "", C_DIM);
+   // ---- today, money first
+   double dp=SGet("DAY_PNL",0);
+   PRow(r++,"TODAY",StringConcatenate(DoubleToString(SGet("DAY_TRADES",0),0),"/",
+        IntegerToString(MaxTradesPerDay)," trades   P/L ",(dp>=0?"+":""),DoubleToString(dp,2),
+        "   losses ",DoubleToString(SGet("CONSEC_LOSS",0),0),"/",IntegerToString(MaxConsecLosses)),
+        dp>0?C_GOOD:(dp<0?C_BAD:C_VAL));
 
-   bool blocked = DayBlockedQuiet();
-   PRow(r++, "Today", StringConcatenate(DoubleToString(SGet("DAY_TRADES",0),0), "/",
-             IntegerToString(MaxTradesPerDay), " trades    consec ",
-             DoubleToString(SGet("CONSEC_LOSS",0),0), "/", IntegerToString(MaxConsecLosses),
-             blocked ? "    BLOCKED" : ""), blocked ? C_BAD : C_VAL);
+   PRow(r++,"RISK",StringConcatenate(
+        LotMode==LOT_FIXED?StringConcatenate("fixed ",DoubleToString(FixedLots,2)," lots")
+                          :StringConcatenate(DoubleToString(BaseRiskPercent,2),"% per trade"),
+        "   ",StopLossPips>0?StringConcatenate("SL ",DoubleToString(StopLossPips,0),"p"):"SL auto",
+        "   ",TakeProfitPips>0?StringConcatenate("TP ",DoubleToString(TakeProfitPips,0),"p"):"TP auto"),
+        (StopLossPips>0||TakeProfitPips>0)?C_WARN:C_VAL);
 
-   PRow(r++, "Sizing", (LotMode==LOT_FIXED)
-             ? StringConcatenate("fixed ", DoubleToString(FixedLots,2), " lots")
-             : StringConcatenate("risk ", DoubleToString(BaseRiskPercent,2), "% of balance"),
-             C_VAL);
+   // ---- health: only the numbers that change a decision
+   double peak=SGet("PEAK_EQUITY",0);
+   double dd=(peak>0)?100.0*(peak-AccountEquity())/peak:0;
+   PRow(r++,"HEALTH",StringConcatenate("breakout ",StateName(EngineState(0)),
+        "   fade ",StateName(EngineState(1)),"   DD ",DoubleToString(dd,1),"%"),
+        dd>=MaxDrawdownPct*0.6?C_WARN:C_DIM);
 
-   bool manual = (StopLossPips > 0 || TakeProfitPips > 0);
-   PRow(r++, "Stops", StringConcatenate(
-             StopLossPips   > 0 ? "SL "+DoubleToString(StopLossPips,1)+"p" : "SL engine",
-             "    ",
-             TakeProfitPips > 0 ? "TP "+DoubleToString(TakeProfitPips,1)+"p" : "TP engine"),
-             manual ? C_WARN : C_VAL);
+   double tot=SGet("CNT_L_0",0)+SGet("CNT_L_1",0)+SGet("CNT_S_0",0)+SGet("CNT_S_1",0);
+   PRow(r++,"RECORD",StringConcatenate(DoubleToString(SGet("SUM_L_0",0)+SGet("SUM_L_1",0),2),
+        "R live over ",DoubleToString(SGet("CNT_L_0",0)+SGet("CNT_L_1",0),0)," trades   ",
+        DoubleToString(tot,0)," signals"),C_DIM);
 
-   double tot = SGet("CNT_L_0",0)+SGet("CNT_L_1",0)+SGet("CNT_S_0",0)+SGet("CNT_S_1",0);
-   PRow(r++, "Signals", StringConcatenate(DoubleToString(tot,0),
-             " recorded    target >= 1/day"), C_VAL);
-
-   PRow(r++, "", "all R is NET of cost - gross is in the journal", C_DIM);
+   PRow(r++,"","",C_DIM);
+   double sp=SpreadPips();
+   PRow(r++,"",StringConcatenate(Pad2(GmtHour()),":00 GMT (",(g_offsetSec>=0?"+":""),
+        IntegerToString(g_offsetSec/3600),"h)   spread ",DoubleToString(sp,2),
+        sp>MaxSpreadPips?"  OVER CAP":""),sp>MaxSpreadPips?C_BAD:C_DIM);
 
    ChartRedraw();
 }
