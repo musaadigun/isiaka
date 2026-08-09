@@ -103,8 +103,20 @@ The Keltner engine has a de-duplication guard — `wasInside` (line 258) require
 
 Only one can go live; the rest become shadows. Highly correlated near-duplicates then dominate the EWMA sample, and since they share an outcome, the "rolling expectancy over N results" is far less independent than the count implies.
 
-### M6 — Adaptation latency exceeds any useful horizon
-`MinTradesBeforeAdapt = 8` gates adaptation, and `EwmaAlpha = 0.10` gives roughly a 20-trade memory. At the header's own estimate of ~10 trades per engine per year, the self-monitor takes about a year to switch on and about two years to respond meaningfully — using live counts alone. Shadow trades inflate the count, but per M1 and M5 they are not the same measurement and are not independent. The headline "self-monitoring" feature is effectively dormant over any horizon on which a trader would want it.
+### M6 — The adaptive loop resizes only after the losses are booked
+`MinTradesBeforeAdapt = 8` gates adaptation outright: an engine with fewer than 8 recorded results returns `FULL` regardless of how it is performing. A fresh deployment can therefore take 8 consecutive full-size losses with no response at all.
+
+Past that gate, `EwmaAlpha = 0.10` sets the reaction speed. Starting from the +0.40 EWMA the header quotes for the divergence engine, consecutive full stop-outs move it as `e_n = 1.4·0.9^n − 1`:
+
+```
+loss    EWMA      state
+   3   +0.0206   FULL
+   4   -0.0815   HALF SIZE   <- first response
+   5   -0.1733   HALF SIZE
+   6   -0.2560   STOOD DOWN  <- ~5% of account gone at 1% base risk
+```
+
+So the loop does engage — but only after roughly 5% of the account is gone, and at ~10 trades/engine/year that streak spans about seven months. It is reactive in the strict sense: it books the losses first and resizes afterward. That is inherent to feedback control and is not a defect on its own. It is a problem only because nothing else in the EA protects the account on a shorter timescale.
 
 ### M7 — The spread gate fires precisely when spreads are structurally widest
 `goLive` requires `SpreadPips() <= MaxSpreadPips` (line 281), and the check runs on the first tick of a new H4 bar. On most brokers, H4 bars open at 01:00 / 05:00 / … / 21:00 server time, and one of those opens sits on or near the rollover window where EURUSD spreads routinely blow past 2.0 pips.
