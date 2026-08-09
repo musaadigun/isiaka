@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| XVISION_EURUSD_Intraday_EA_v2.mq4                                  |
+//| XVISION_EURUSD_Intraday_EA_v2_claude.mq4                           |
 //|                                                                    |
 //| MANDATE: EURUSD, at least one trade per day, adaptive, cost-aware. |
 //|                                                                    |
@@ -46,6 +46,24 @@
 //|   * Shadow trades and bars-held survive restart.                   |
 //|   * Hard risk breaker: daily loss, consecutive losses, equity DD.  |
 //|   * Journal records entry regime, lots, spread, commission, swap.  |
+//|                                                                    |
+//| FIXED IN THIS REVISION - all found by auditing v2 against itself   |
+//|   * SGet ignored its own default: StateIndex created any missing   |
+//|     key at 0.0, so the default never surfaced, reads mutated the   |
+//|     store and consumed slots. Now a pure lookup.                   |
+//|   * Flat-out compared GmtHour() >= N. Offline across the flat      |
+//|     window, the hour wraps to a SMALLER number after midnight and  |
+//|     the position leaks into the next session. Now an absolute      |
+//|     stored deadline, on both the live and shadow paths.            |
+//|   * The consecutive-loss breaker was unreachable: 4 live trades a  |
+//|     day against a limit of 5, with the counter zeroed nightly. It  |
+//|     now runs across days, and firing consumes it so the next day   |
+//|     starts clean rather than livelocking permanently blocked.      |
+//|   * A transient history gap at attach cached a dead session and    |
+//|     killed the whole trading day. Only definitive verdicts cache.  |
+//|   * Shadow trades never recorded their entry spread.               |
+//|   * A second order sharing an engine magic was silently orphaned.  |
+//|   * Per-trade state was left stale on the slot after a close.      |
 //+------------------------------------------------------------------+
 #property strict
 #property description "EURUSD intraday adaptive EA - London breakout + Asian fade"
@@ -105,12 +123,12 @@ input bool   ResetAdaptiveState    = false;
 #define TF          PERIOD_M15
 #define STATE_KEYS  160
 
-string JOURNAL   = "XVISION_EURUSD_v2_Journal.csv";
-string STATEFILE = "XVISION_EURUSD_v2_State.csv";
+string JOURNAL   = "XVISION_EURUSD_v2_claude_Journal.csv";
 
 //--- bar clock
 datetime g_lastBar = 0;
 datetime g_lastSelectWarn = 0;
+string   g_exitReason[NENG];
 int      g_offsetSec = 0;
 double   g_pip = 0.0001;
 
@@ -150,11 +168,13 @@ int StateIndex(string key)
    return(k_n-1);
 }
 
+//| PURE lookup. Deliberately does NOT create the key: a read must never
+//| mutate the store, must never consume a slot, and must actually return
+//| the caller's default when the key is absent.
 double SGet(string key, double def=0.0)
 {
-   int i = StateIndex(key);
-   if(i < 0) return(def);
-   return(k_val[i]);
+   for(int i=0; i<k_n; i++) if(k_key[i]==key) return(k_val[i]);
+   return(def);
 }
 
 void SSet(string key, double v)
@@ -167,7 +187,7 @@ void SSet(string key, double v)
 
 string StateFileName()
 {
-   return(StringConcatenate("XVISION_EURUSD_v2_State_",
+   return(StringConcatenate("XVISION_EURUSD_v2_claude_State_",
           IntegerToString(AccountNumber()), "_", Symbol(), ".csv"));
 }
 
@@ -177,7 +197,7 @@ void StateLoad()
    string fn = StateFileName();
    if(!FileIsExist(fn)) return;
    int fh = FileOpen(fn, FILE_CSV|FILE_READ|FILE_SHARE_READ, ',');
-   if(fh == INVALID_HANDLE) { Print("v2: could not read state file, starting clean."); return; }
+   if(fh == INVALID_HANDLE) { Print("claude-v2: could not read state file, starting clean."); return; }
    while(!FileIsEnding(fh) && k_n < STATE_KEYS)
    {
       string key = FileReadString(fh);
@@ -186,7 +206,7 @@ void StateLoad()
       if(StringLen(key) > 0) { k_key[k_n] = key; k_val[k_n] = v; k_n++; }
    }
    FileClose(fh);
-   Print("v2: state loaded, ", k_n, " keys.");
+   Print("claude-v2: state loaded, ", k_n, " keys.");
 }
 
 void StateFlush()
@@ -194,7 +214,7 @@ void StateFlush()
    if(!k_dirty) return;
    string fn = StateFileName();
    int fh = FileOpen(fn, FILE_CSV|FILE_WRITE|FILE_SHARE_READ, ',');
-   if(fh == INVALID_HANDLE) { Print("v2: WARNING state file not writable, adaptive memory at risk."); return; }
+   if(fh == INVALID_HANDLE) { Print("claude-v2: WARNING state file not writable, adaptive memory at risk."); return; }
    for(int i=0; i<k_n; i++) FileWrite(fh, k_key[i], DoubleToString(k_val[i], 8));
    FileClose(fh);
    k_dirty = false;
@@ -209,13 +229,13 @@ void DetectOffset()
    if(IsTesting() || IsOptimization())
    {
       g_offsetSec = 0;
-      Print("v2: WARNING TimeGMT() is unreliable in the tester. ",
+      Print("claude-v2: WARNING TimeGMT() is unreliable in the tester. ",
             "Assuming server = GMT. Set ServerGmtOffsetHours explicitly for a valid test.");
       return;
    }
    int diff = (int)(TimeCurrent() - TimeGMT());
    g_offsetSec = (int)(MathRound(diff/3600.0)*3600);
-   Print("v2: detected server-GMT offset ", g_offsetSec/3600, "h. ",
+   Print("claude-v2: detected server-GMT offset ", g_offsetSec/3600, "h. ",
          "Sessions are defined in GMT; verify this looks right for your broker.");
 }
 
@@ -237,17 +257,20 @@ bool BuildSession()
    datetime aEnd   = day0 + AsianEndHour*3600;
    if(gNow < aEnd) return(false);             // window still open, nothing to measure
 
-   g_sessDay = day0;
-   g_rangeOk = false;
-
+   // Do NOT stamp g_sessDay yet. History may still be downloading right
+   // after attach; caching a failure here would mark the day dead and never
+   // retry it. Only a definitive verdict gets cached.
    int iEnd   = iBarShift(NULL, TF, ToServer(aEnd) - 1, false);
    int iStart = iBarShift(NULL, TF, ToServer(aStart), false);
-   if(iEnd < 0 || iStart < 0 || iStart < iEnd) return(false);
+   if(iEnd < 0 || iStart < 0 || iStart < iEnd) return(false);   // transient, retry next bar
+
+   g_sessDay = day0;
+   g_rangeOk = false;
 
    int count = iStart - iEnd + 1;
    if(count < MinAsianBars)
    {
-      Print("v2: only ", count, " M15 bars in today's Asian window (need ",
+      Print("claude-v2: only ", count, " M15 bars in today's Asian window (need ",
             MinAsianBars, ") - standing aside for the day.");
       return(false);
    }
@@ -272,7 +295,7 @@ int OnInit()
    string sym = Symbol(); StringToUpper(sym);
    if(StringFind(sym, "EURUSD") < 0)
    {
-      Alert("v2: engines are reasoned for EURUSD only. Refusing to load on ", Symbol());
+      Alert("claude-v2: engines are reasoned for EURUSD only. Refusing to load on ", Symbol());
       return(INIT_FAILED);
    }
 
@@ -284,7 +307,7 @@ int OnInit()
    if(ResetBreaker)
    {
       SSet("HALTED", 0); SSet("PEAK_EQUITY", AccountEquity());
-      Print("v2: risk breaker cleared, equity peak re-anchored.");
+      Print("claude-v2: risk breaker cleared, equity peak re-anchored.");
    }
 
    for(int e=0; e<NENG; e++)
@@ -371,7 +394,6 @@ void RollDay()
    SSet("DAY_PNL", 0);
    SSet("DAY_BLOCKED", 0);
    SSet("DAY_START_EQUITY", AccountEquity());
-   SSet("CONSEC_LOSS", 0);
    for(int e=0; e<NENG; e++) SSet("DAY_DONE_"+IntegerToString(e), 0);
 }
 
@@ -492,7 +514,7 @@ void HandleSignal(int eng, int dir)
    if(goLive) why = "live order failed";
 
    OpenShadow(eng, dir, entry, stop, target, risk);
-   Say(StringConcatenate("v2 ", EngName(eng), " ", (dir>0?"BUY":"SELL"),
+   Say(StringConcatenate("claude-v2 ", EngName(eng), " ", (dir>0?"BUY":"SELL"),
        " SHADOW (", why, ")  entry ", DoubleToString(entry,Digits),
        " stop ", DoubleToString(stop,Digits), " target ", DoubleToString(target,Digits)));
 }
@@ -505,7 +527,7 @@ void HandleSignal(int eng, int dir)
 bool OpenLive(int eng, int dir, double stop, double target, double risk, double mult)
 {
    double lots = LotsForRisk(risk, mult);
-   if(lots <= 0) { Print("v2: lots resolved to 0 for ", EngName(eng)); return(false); }
+   if(lots <= 0) { Print("claude-v2: lots resolved to 0 for ", EngName(eng)); return(false); }
 
    int    type  = (dir>0) ? OP_BUY : OP_SELL;
    int    magic = MagicBase + eng;
@@ -525,24 +547,24 @@ bool OpenLive(int eng, int dir, double stop, double target, double risk, double 
       // broker minimum distance
       if(MathAbs(px - sl) < minDist || MathAbs(px - tp) < minDist)
       {
-         Print("v2: ", EngName(eng), " levels inside broker stop level (",
+         Print("claude-v2: ", EngName(eng), " levels inside broker stop level (",
                DoubleToString(minDist/g_pip,2), " pips) - skipping.");
          return(false);
       }
       // price may have moved through our own stop while we computed
       if((dir>0 && px <= sl) || (dir<0 && px >= sl))
       {
-         Print("v2: ", EngName(eng), " price moved through stop before entry - skipping.");
+         Print("claude-v2: ", EngName(eng), " price moved through stop before entry - skipping.");
          return(false);
       }
       if(AccountFreeMarginCheck(Symbol(), type, lots) <= 0)
       {
-         Print("v2: insufficient free margin for ", DoubleToString(lots,2), " lots.");
+         Print("claude-v2: insufficient free margin for ", DoubleToString(lots,2), " lots.");
          return(false);
       }
 
       int t = OrderSend(Symbol(), type, lots, px, SlippagePoints, sl, tp,
-                        "XV2_"+IntegerToString(eng), magic, 0,
+                        "XV2claude_"+IntegerToString(eng), magic, 0,
                         (dir>0)?clrDodgerBlue:clrTomato);
       if(t >= 0) { RegisterLive(eng, t, dir, px, sl, tp, risk); return(true); }
 
@@ -554,20 +576,20 @@ bool OpenLive(int eng, int dir, double stop, double target, double risk, double 
          RefreshRates();
          px = (dir>0) ? Ask : Bid;
          t = OrderSend(Symbol(), type, lots, px, SlippagePoints, 0, 0,
-                       "XV2_"+IntegerToString(eng), magic, 0,
+                       "XV2claude_"+IntegerToString(eng), magic, 0,
                        (dir>0)?clrDodgerBlue:clrTomato);
          if(t >= 0)
          {
             if(OrderSelect(t, SELECT_BY_TICKET) &&
                !OrderModify(t, OrderOpenPrice(), sl, tp, 0, clrNONE))
-               Print("v2: WARNING opened ticket ", t, " but SL/TP not set, error ", GetLastError());
+               Print("claude-v2: WARNING opened ticket ", t, " but SL/TP not set, error ", GetLastError());
             RegisterLive(eng, t, dir, px, sl, tp, risk);
             return(true);
          }
          err = GetLastError();
       }
 
-      Print("v2: OrderSend attempt ", attempt+1, " failed, error ", err);
+      Print("claude-v2: OrderSend attempt ", attempt+1, " failed, error ", err);
       if(err==146 || err==136 || err==138 || err==135 || err==137)
          { Sleep(300*(attempt+1)); continue; }   // transient, back off and retry
       break;                                     // anything else will not fix itself
@@ -589,11 +611,12 @@ void RegisterLive(int eng, int ticket, int dir, double px, double sl, double tp,
    SSet(p+"TICKET", ticket); SSet(p+"DIR", dir);   SSet(p+"ENTRY", px);
    SSet(p+"STOP", sl);       SSet(p+"TARGET", tp); SSet(p+"RISK", risk);
    SSet(p+"OPENED", (double)TimeCurrent());
+   SSet(p+"DEADLINE", (double)FlatDeadline(eng, TimeCurrent()));
+   SSet(p+"SPREAD", SpreadPips());
    SSet("DAY_TRADES", SGet("DAY_TRADES",0) + 1);
-   SSet("SPREAD_AT_ENTRY_"+IntegerToString(eng), SpreadPips());
    StateFlush();
 
-   Say(StringConcatenate("v2 ", EngName(eng), " ", (dir>0?"BUY":"SELL"), " LIVE ticket ", ticket,
+   Say(StringConcatenate("claude-v2 ", EngName(eng), " ", (dir>0?"BUY":"SELL"), " LIVE ticket ", ticket,
        "  entry ", DoubleToString(px,Digits), "  stop ", DoubleToString(sl,Digits),
        "  target ", DoubleToString(tp,Digits),
        "  risk ", DoubleToString(MathAbs(px-sl)/g_pip,1), " pips"));
@@ -613,13 +636,14 @@ void ManagePositions()
          if(TimeCurrent() - g_lastSelectWarn > 60)
          {
             g_lastSelectWarn = TimeCurrent();
-            Print("v2: WARNING OrderSelect failed for ticket ", g_ticket[e], ", retrying.");
+            Print("claude-v2: WARNING OrderSelect failed for ticket ", g_ticket[e], ", retrying.");
          }
          continue;
       }
       if(OrderCloseTime() == 0)
       {
-         if(GmtHour() >= EngineFlatHour(e)) CloseLive(e, "session flat");
+         double dl = SGet("LIVE_"+IntegerToString(e)+"_DEADLINE", 0);
+         if(dl > 0 && TimeCurrent() >= (datetime)dl) CloseLive(e, "session flat");
          continue;
       }
       BookLive(e);
@@ -635,9 +659,9 @@ void CloseLive(int eng, string reason)
       double px = (OrderType()==OP_BUY) ? Bid : Ask;
       if(OrderClose(g_ticket[eng], OrderLots(), NormalizeDouble(px,Digits),
                     SlippagePoints, clrGray))
-      { SSet("EXIT_REASON_"+IntegerToString(eng), 1); return; }
+      { g_exitReason[eng] = reason; SSet("EXIT_REASON_"+IntegerToString(eng), 1); return; }
       int err = GetLastError();
-      Print("v2: OrderClose attempt ", attempt+1, " failed, error ", err);
+      Print("claude-v2: OrderClose attempt ", attempt+1, " failed, error ", err);
       if(err==146 || err==136 || err==138) { Sleep(300*(attempt+1)); continue; }
       break;
    }
@@ -657,7 +681,7 @@ void BookLive(int eng)
    if(risk <= 0)
    {
       // B5 fix: never fabricate R=0. Log it, exclude it from the EWMA.
-      Print("v2: ERROR risk unknown for ticket ", g_ticket[eng],
+      Print("claude-v2: ERROR risk unknown for ticket ", g_ticket[eng],
             " - result EXCLUDED from adaptive stats.");
       JournalRow(eng, "LIVE-UNSCORED", dir, lots, entry, exit, comm, swap, 0, 0, "unknown risk");
       ClearLive(eng);
@@ -672,8 +696,13 @@ void BookLive(int eng)
    RecordResult(eng, netR, true);
    SSet("DAY_PNL", SGet("DAY_PNL",0) + OrderProfit() + comm + swap);
 
-   string reason = (SGet("EXIT_REASON_"+IntegerToString(eng),0) > 0.5) ? "session flat"
-                 : (MathAbs(exit - g_target[eng]) < MathAbs(exit - g_stop[eng]) ? "target" : "stop");
+   string reason;
+   if(SGet("EXIT_REASON_"+IntegerToString(eng),0) > 0.5)
+      reason = (StringLen(g_exitReason[eng]) > 0 ? g_exitReason[eng] : "session flat");
+   else if(g_target[eng] <= 0 || g_stop[eng] <= 0)
+      reason = "closed, levels unknown";          // do not guess from absent levels
+   else
+      reason = (MathAbs(exit - g_target[eng]) < MathAbs(exit - g_stop[eng]) ? "target" : "stop");
    JournalRow(eng, "LIVE", dir, lots, entry, exit, comm, swap, grossR, netR, reason);
    ClearLive(eng);
 }
@@ -682,8 +711,11 @@ void ClearLive(int eng)
 {
    g_ticket[eng]=-1; g_risk[eng]=0; g_entry[eng]=0; g_dir[eng]=0; g_opened[eng]=0;
    string p = "LIVE_"+IntegerToString(eng)+"_";
-   SSet(p+"TICKET", -1);
+   SSet(p+"TICKET", -1);   SSet(p+"RISK", 0);     SSet(p+"ENTRY", 0);
+   SSet(p+"STOP", 0);      SSet(p+"TARGET", 0);   SSet(p+"DEADLINE", 0);
    SSet("EXIT_REASON_"+IntegerToString(eng), 0);
+   g_exitReason[eng] = "";
+   g_stop[eng] = 0; g_target[eng] = 0;
    StateFlush();
 }
 
@@ -696,6 +728,16 @@ void RecoverPositions()
       int eng = OrderMagicNumber() - MagicBase;
       if(eng < 0 || eng >= NENG) continue;
 
+      // two orders on one engine magic: the slot can only hold one, and
+      // silently overwriting it would orphan the other from all management.
+      if(g_ticket[eng] >= 0)
+      {
+         Print("claude-v2: WARNING ", EngName(eng), " has more than one open order (",
+               g_ticket[eng], " and ", OrderTicket(), "). Slot keeps ", g_ticket[eng],
+               "; close the extra manually - it is NOT being managed.");
+         continue;
+      }
+
       string p = "LIVE_"+IntegerToString(eng)+"_";
       g_ticket[eng] = OrderTicket();
       g_dir[eng]    = (OrderType()==OP_BUY) ? 1 : -1;
@@ -705,14 +747,18 @@ void RecoverPositions()
       g_risk[eng]   = SGet(p+"RISK", 0);
       g_opened[eng] = (datetime)SGet(p+"OPENED", 0);
 
+      if(SGet(p+"DEADLINE",0) <= 0)
+         SSet(p+"DEADLINE", (double)FlatDeadline(eng,
+              g_opened[eng] > 0 ? g_opened[eng] : TimeCurrent()));
+
       // B6 fix: risk is recoverable from the live SL if state was lost
       if(g_risk[eng] <= 0 && OrderStopLoss() > 0)
       {
          g_risk[eng] = MathAbs(OrderOpenPrice() - OrderStopLoss());
          SSet(p+"RISK", g_risk[eng]);
-         Print("v2: risk for ticket ", g_ticket[eng], " rebuilt from live stop loss.");
+         Print("claude-v2: risk for ticket ", g_ticket[eng], " rebuilt from live stop loss.");
       }
-      Print("v2: recovered ", EngName(eng), " ticket ", g_ticket[eng]);
+      Print("claude-v2: recovered ", EngName(eng), " ticket ", g_ticket[eng]);
    }
 }
 
@@ -731,6 +777,8 @@ void OpenShadow(int eng, int dir, double entry, double stop, double target, doub
    SSet(p+"ON",1); SSet(p+"DIR",dir); SSet(p+"ENTRY",entry);
    SSet(p+"STOP",stop); SSet(p+"TARGET",target); SSet(p+"RISK",risk);
    SSet(p+"OPENED",(double)TimeCurrent());
+   SSet(p+"DEADLINE",(double)FlatDeadline(eng, TimeCurrent()));
+   SSet(p+"SPREAD", SpreadPips());
    StateFlush();
 }
 
@@ -748,7 +796,10 @@ void RecoverShadows()
       s_risk[e]   = SGet(p+"RISK",0);
       s_opened[e] = (datetime)SGet(p+"OPENED",0);
       if(s_risk[e] <= 0) { s_on[e]=false; SSet(p+"ON",0); continue; }
-      Print("v2: recovered shadow trade for ", EngName(e));
+      if(SGet(p+"DEADLINE",0) <= 0)
+         SSet(p+"DEADLINE", (double)FlatDeadline(e,
+              s_opened[e] > 0 ? s_opened[e] : TimeCurrent()));
+      Print("claude-v2: recovered shadow trade for ", EngName(e));
    }
 }
 
@@ -763,7 +814,8 @@ void UpdateShadows()
 
       bool hitStop = (d>0) ? (lo <= s_stop[e])   : (hi >= s_stop[e]);
       bool hitTgt  = (d>0) ? (hi >= s_target[e]) : (lo <= s_target[e]);
-      bool flat    = (GmtHour() >= EngineFlatHour(e));  // identical to the live rule
+      double dlS   = SGet("SHDW_"+IntegerToString(e)+"_DEADLINE", 0);
+      bool flat    = (dlS > 0 && TimeCurrent() >= (datetime)dlS);  // identical to live
 
       double exitPx; string reason;
       if(hitStop)     { exitPx = s_stop[e];   reason = "stop"; }
@@ -779,6 +831,7 @@ void UpdateShadows()
 
       s_on[e] = false;
       SSet("SHDW_"+IntegerToString(e)+"_ON", 0);
+      SSet("SHDW_"+IntegerToString(e)+"_DEADLINE", 0);
    }
 }
 
@@ -811,7 +864,7 @@ void RecordResult(int eng, double netR, bool isLive)
    }
    StateFlush();
 
-   Print("v2 ", EngName(eng), " ", (isLive?"LIVE":"SHADOW"),
+   Print("claude-v2 ", EngName(eng), " ", (isLive?"LIVE":"SHADOW"),
          " closed netR=", DoubleToString(netR,3),
          "  rolling ", DoubleToString(ewma,3),
          " over ", DoubleToString(cnt+1,0), "  state ", StateName(EngineState(eng)));
@@ -853,9 +906,9 @@ void UpdateEngineLatches()
       bool   was = (SGet("DOWN_"+idx,0) > 0.5);
 
       if(st == 2 && !was)
-      { SSet("DOWN_"+idx, 1); Say("v2: "+EngName(e)+" STOOD DOWN - shadow trading only."); }
+      { SSet("DOWN_"+idx, 1); Say("claude-v2: "+EngName(e)+" STOOD DOWN - shadow trading only."); }
       else if(st != 2 && was)
-      { SSet("DOWN_"+idx, 0); Say("v2: "+EngName(e)+" RE-ENABLED at half size."); }
+      { SSet("DOWN_"+idx, 0); Say("claude-v2: "+EngName(e)+" RE-ENABLED at half size."); }
    }
 }
 
@@ -868,7 +921,7 @@ void ResetState()
       SSet("EWMA_S_"+idx,0); SSet("CNT_S_"+idx,0); SSet("SUM_S_"+idx,0); SSet("WIN_S_"+idx,0);
       SSet("DOWN_"+idx,0);
    }
-   Print("v2: adaptive state reset.");
+   Print("claude-v2: adaptive state reset.");
 }
 
 //+------------------------------------------------------------------+
@@ -887,7 +940,7 @@ void UpdateEquityPeak()
       if(dd >= MaxDrawdownPct && SGet("HALTED",0) < 0.5)
       {
          SSet("HALTED", 1);
-         Say(StringConcatenate("v2: HALTED - drawdown ", DoubleToString(dd,2),
+         Say(StringConcatenate("claude-v2: HALTED - drawdown ", DoubleToString(dd,2),
              "% from peak equity. No further trading until ResetBreaker is set."));
       }
    }
@@ -907,15 +960,19 @@ bool DayBlocked()
       if(lossPct >= DailyLossLimitPct)
       {
          SSet("DAY_BLOCKED", 1);
-         Say(StringConcatenate("v2: daily loss limit hit (", DoubleToString(lossPct,2),
+         Say(StringConcatenate("claude-v2: daily loss limit hit (", DoubleToString(lossPct,2),
              "%) - no further entries today."));
          return(true);
       }
    }
+   // NOT reset by RollDay: at <=4 live trades/day a nightly reset made this
+   // limit mathematically unreachable. It now runs across days, and the
+   // block consumes it so tomorrow starts clean instead of livelocking.
    if(SGet("CONSEC_LOSS",0) >= MaxConsecLosses)
    {
       SSet("DAY_BLOCKED", 1);
-      Say("v2: "+DoubleToString(SGet("CONSEC_LOSS",0),0)+" consecutive losses - stopping for the day.");
+      Say("claude-v2: "+DoubleToString(SGet("CONSEC_LOSS",0),0)+" consecutive losses - stopping for the day.");
+      SSet("CONSEC_LOSS", 0);
       return(true);
    }
    return(false);
@@ -972,6 +1029,18 @@ int LotDigits(double step)
 //| breakout runs to FlatByHour.
 int EngineFlatHour(int eng) { return(eng==ENG_FADE ? AsianEndHour : FlatByHour); }
 
+//| Absolute flat-out instant for a trade opened at openedSrv. Comparing
+//| against a stored timestamp instead of "GmtHour() >= N" is what stops a
+//| position surviving its own flat window by being offline across it and
+//| then reading a SMALLER hour number after midnight.
+datetime FlatDeadline(int eng, datetime openedSrv)
+{
+   datetime gOpen = ToGmt(openedSrv);
+   datetime dl    = GmtDay(gOpen) + EngineFlatHour(eng)*3600;
+   if(dl <= gOpen) dl += 86400;
+   return(ToServer(dl));
+}
+
 double Mid()        { return((Ask + Bid)/2.0); }
 double SpreadPips() { return((Ask - Bid)/g_pip); }
 
@@ -985,7 +1054,7 @@ void JournalRow(int eng, string mode, int dir, double lots, double entry, double
    if(!WriteJournal) return;
    int fh = FileOpen(JOURNAL, FILE_CSV|FILE_READ|FILE_WRITE|FILE_SHARE_READ, ',');
    if(fh == INVALID_HANDLE)
-   { Print("v2: WARNING journal not writable (is the CSV open elsewhere?) - row lost."); return; }
+   { Print("claude-v2: WARNING journal not writable (is the CSV open elsewhere?) - row lost."); return; }
 
    FileSeek(fh, 0, SEEK_END);
    datetime entryGmt = (mode == "SHADOW") ? ToGmt(s_opened[eng]) : ToGmt(g_opened[eng]);
@@ -998,7 +1067,7 @@ void JournalRow(int eng, string mode, int dir, double lots, double entry, double
       DoubleToString(entry,Digits), DoubleToString(exit,Digits),
       TimeToString(entryGmt, TIME_DATE|TIME_SECONDS),
       IntegerToString(TimeHour(entryGmt)),
-      DoubleToString(SGet("SPREAD_AT_ENTRY_"+idx, SpreadPips()), 2),
+      DoubleToString(SGet((mode=="SHADOW"?"SHDW_":"LIVE_")+idx+"_SPREAD", SpreadPips()), 2),
       DoubleToString(comm,2), DoubleToString(swap,2),
       DoubleToString(grossR,3), DoubleToString(netR,3),
       DoubleToString(SGet("EWMA_L_"+idx,0),3),
@@ -1029,7 +1098,7 @@ void Panel()
 
    double tot  = SGet("CNT_L_0",0)+SGet("CNT_L_1",0)+SGet("CNT_S_0",0)+SGet("CNT_S_1",0);
 
-   string t = "XVISION EURUSD INTRADAY v2   " + (SignalOnly?"[SIGNAL-ONLY]":"[LIVE]");
+   string t = "XVISION EURUSD INTRADAY v2 (claude)   " + (SignalOnly?"[SIGNAL-ONLY]":"[LIVE]");
    if(Halted()) t += "   *** HALTED ***";
    t += "\n";
    t += StringConcatenate("GMT ", IntegerToString(GmtHour()), ":00   spread ",
