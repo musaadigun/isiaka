@@ -1,0 +1,1181 @@
+<title>GoldSeek EA v3 Audit</title>
+<style>
+  /* ---- Tokens: light is the base set ---- */
+  :root {
+    --ground:      #F2F4F6;
+    --surface:     #FFFFFF;
+    --surface-2:   #E9ECF0;
+    --ink:         #131920;
+    --ink-2:       #46525F;
+    --ink-3:       #6E7B8A;
+    --rule:        #D5DAE1;
+    --rule-2:      #E4E8ED;
+
+    --gold:        #9A6C0B;
+    --gold-soft:   #F5E7C4;
+    --crit:        #A8231B;
+    --crit-soft:   #F7DEDB;
+    --high:        #9A5209;
+    --high-soft:   #FAE5D0;
+    --med:         #3F5470;
+    --med-soft:    #DFE6EF;
+    --low:         #616D7C;
+    --low-soft:    #E5E9EE;
+    --good:        #0E6048;
+    --good-soft:   #D7EDE4;
+
+    --shadow:      0 1px 2px rgba(19,25,32,.05), 0 6px 20px -12px rgba(19,25,32,.22);
+
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --serif: Charter, "Bitstream Charter", "Iowan Old Style", "Source Serif Pro", Georgia, Cambria, serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:    #0D1017;
+      --surface:   #151A23;
+      --surface-2: #1D242F;
+      --ink:       #E3E8EF;
+      --ink-2:     #A7B4C4;
+      --ink-3:     #7C8A9C;
+      --rule:      #2A323F;
+      --rule-2:    #222933;
+
+      --gold:      #EBB53F;
+      --gold-soft: #33280F;
+      --crit:      #FF7A6B;
+      --crit-soft: #3A1C18;
+      --high:      #FFA657;
+      --high-soft: #372412;
+      --med:       #93AECE;
+      --med-soft:  #1C2634;
+      --low:       #93A0B0;
+      --low-soft:  #1E242D;
+      --good:      #4FCF9B;
+      --good-soft: #123028;
+
+      --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -14px rgba(0,0,0,.8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:    #0D1017;
+    --surface:   #151A23;
+    --surface-2: #1D242F;
+    --ink:       #E3E8EF;
+    --ink-2:     #A7B4C4;
+    --ink-3:     #7C8A9C;
+    --rule:      #2A323F;
+    --rule-2:    #222933;
+
+    --gold:      #EBB53F;
+    --gold-soft: #33280F;
+    --crit:      #FF7A6B;
+    --crit-soft: #3A1C18;
+    --high:      #FFA657;
+    --high-soft: #372412;
+    --med:       #93AECE;
+    --med-soft:  #1C2634;
+    --low:       #93A0B0;
+    --low-soft:  #1E242D;
+    --good:      #4FCF9B;
+    --good-soft: #123028;
+
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+
+  /* ---- Base ---- */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--sans);
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -0.018em;
+  }
+
+  p { margin: 0; max-width: 68ch; }
+
+  a {
+    color: var(--gold);
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 3px;
+    border-radius: 3px;
+  }
+
+  code, .mono { font-family: var(--mono); }
+
+  code {
+    font-size: .855em;
+    background: var(--surface-2);
+    padding: .1em .38em;
+    border-radius: 4px;
+    color: var(--ink);
+  }
+
+  /* ---- Masthead ---- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .masthead-inner {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .eyebrow .tick { color: var(--gold); }
+  h1 {
+    font-size: clamp(34px, 6vw, 50px);
+    line-height: 1.05;
+    font-weight: 660;
+  }
+  .standfirst {
+    font-size: 19.5px;
+    color: var(--ink-2);
+    max-width: 60ch;
+  }
+  .meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 1px;
+    background: var(--rule-2);
+    border: 1px solid var(--rule-2);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .meta div {
+    background: var(--surface);
+    padding: 12px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .meta dt {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .meta dd {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    font-weight: 550;
+    color: var(--ink);
+  }
+
+  /* ---- Sections ---- */
+  section { padding-top: 64px; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 9px;
+    margin-bottom: 28px;
+  }
+  .sec-head h2 {
+    font-size: 25px;
+    font-weight: 640;
+  }
+  .sec-head .rail {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .stack { display: flex; flex-direction: column; gap: 18px; }
+  .stack-tight { display: flex; flex-direction: column; gap: 11px; }
+
+  /* ---- Verdict ---- */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--crit);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 26px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .verdict-line {
+    font-family: var(--sans);
+    font-size: 21px;
+    font-weight: 640;
+    line-height: 1.35;
+    letter-spacing: -0.015em;
+  }
+  .vgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+  }
+  .vgrid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule);
+  }
+  .vgrid dt {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .vgrid dd {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 560;
+    line-height: 1.4;
+  }
+  .yes { color: var(--good); }
+  .no  { color: var(--crit); }
+
+  /* ---- Severity strip ---- */
+  .sev-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .sev-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--band, var(--rule));
+    border-radius: 7px;
+    padding: 15px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sev-card .n {
+    font-family: var(--sans);
+    font-size: 34px;
+    font-weight: 660;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--band, var(--ink));
+  }
+  .sev-card .lbl {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin-top: 6px;
+  }
+  .sev-card .desc {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink-3);
+    line-height: 1.4;
+  }
+  .p0 { --band: var(--crit); }
+  .p1 { --band: var(--high); }
+  .p2 { --band: var(--med); }
+  .p3 { --band: var(--low); }
+  .ok { --band: var(--good); }
+
+  /* ---- Findings ---- */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--band, var(--rule));
+    border-radius: 7px;
+    padding: 20px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .fhead { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--chip-bg, var(--low-soft));
+    color: var(--band, var(--ink-2));
+    white-space: nowrap;
+  }
+  .finding.p0 { --chip-bg: var(--crit-soft); }
+  .finding.p1 { --chip-bg: var(--high-soft); }
+  .finding.p2 { --chip-bg: var(--med-soft); }
+  .finding.p3 { --chip-bg: var(--low-soft); }
+  .finding h3 {
+    font-size: 18.5px;
+    font-weight: 620;
+    line-height: 1.3;
+    flex: 1 1 260px;
+  }
+  .lines {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .finding p { font-size: 16px; }
+
+  .scenario {
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 13px 16px;
+    font-size: 15.5px;
+    color: var(--ink-2);
+    max-width: 68ch;
+  }
+  .scenario b {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+
+  .fix {
+    font-family: var(--sans);
+    font-size: 14.5px;
+    color: var(--ink-2);
+    border-top: 1px solid var(--rule-2);
+    padding-top: 11px;
+    max-width: 68ch;
+  }
+  .fix b {
+    color: var(--gold);
+    font-weight: 620;
+  }
+
+  /* ---- Code block ---- */
+  pre {
+    margin: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--rule-2);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.62;
+    color: var(--ink-2);
+  }
+  pre .hl { color: var(--crit); font-weight: 600; }
+  pre .dim { color: var(--ink-3); }
+
+  /* ---- Tables ---- */
+  .tscroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 7px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 15px; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; font-family: var(--mono); font-size: 13px; }
+  td strong { font-weight: 620; }
+
+  /* ---- Lists ---- */
+  ul.plain { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 11px; }
+  ul.plain li {
+    padding-left: 20px;
+    position: relative;
+    max-width: 68ch;
+    font-size: 16px;
+  }
+  ul.plain li::before {
+    content: "";
+    position: absolute;
+    left: 2px; top: .62em;
+    width: 7px; height: 7px;
+    border-radius: 1px;
+    background: var(--marker, var(--ink-3));
+  }
+  ul.plain.good li::before { background: var(--good); }
+  ul.plain li b { font-family: var(--sans); font-weight: 620; font-size: 15.5px; }
+
+  /* ---- Stage cards ---- */
+  .stages { display: flex; flex-direction: column; gap: 12px; }
+  .stage {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 18px 20px;
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .stage .idx {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--gold);
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .stage h3 { font-size: 17px; font-weight: 620; margin-bottom: 5px; }
+  .stage .est {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-top: 8px;
+    display: block;
+  }
+  .stage.gate { border-left: 3px solid var(--gold); background: var(--gold-soft); }
+  .stage.gate .idx { color: var(--gold); }
+
+  /* ---- Claims ---- */
+  .claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .claims > div {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 18px 20px;
+  }
+  .claims h3 {
+    font-size: 14px;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    margin-bottom: 13px;
+  }
+  .claims .can h3 { color: var(--good); }
+  .claims .cant h3 { color: var(--crit); }
+  .claims ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .claims li {
+    font-size: 15px;
+    padding-left: 22px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .claims .can li::before  { content: "✓"; position: absolute; left: 0; color: var(--good); font-family: var(--sans); font-weight: 700; }
+  .claims .cant li::before { content: "✕"; position: absolute; left: 0; color: var(--crit); font-family: var(--sans); font-weight: 700; }
+
+  /* ---- Closing ---- */
+  .closing {
+    margin-top: 64px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--gold);
+    border-radius: 8px;
+    padding: 28px 30px;
+    box-shadow: var(--shadow);
+  }
+  .closing p {
+    font-family: var(--sans);
+    font-size: 19px;
+    font-weight: 540;
+    line-height: 1.5;
+    letter-spacing: -0.012em;
+    max-width: 62ch;
+  }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.8;
+    color: var(--ink-3);
+    letter-spacing: .04em;
+  }
+
+  @media (max-width: 620px) {
+    body { font-size: 16px; }
+    .masthead-inner { padding: 40px 20px 32px; }
+    .wrap { padding: 0 20px 72px; }
+    .stage { grid-template-columns: 1fr; gap: 8px; }
+  }
+</style>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="eyebrow">
+      <span>Code Audit</span><span class="tick">◆</span>
+      <span>GoldSeekAdaptiveEA_v3.mq4</span><span class="tick">◆</span>
+      <span>12 Aug 2026</span>
+    </div>
+    <h1>GoldSeek Adaptive EA v3</h1>
+    <p class="standfirst">
+      Well-built infrastructure and a reasonable trend-following core, wrapped in probability
+      machinery that does almost nothing — with four independent paths to a loss larger than
+      the configured stop.
+    </p>
+    <dl class="meta">
+      <div><dt>Platform</dt><dd>MetaTrader 4 · MQL4</dd></div>
+      <div><dt>Source</dt><dd>2,201 lines</dd></div>
+      <div><dt>Instrument</dt><dd>XAUUSD · M5 / M1</dd></div>
+      <div><dt>Method</dt><dd>Full static read</dd></div>
+    </dl>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- VERDICT -->
+  <section id="verdict">
+    <div class="sec-head">
+      <h2>Verdict</h2>
+      <span class="rail">§ 01</span>
+    </div>
+    <div class="verdict">
+      <p class="verdict-line">
+        Not safe for live capital as written. Ready for demo forward-testing after four small fixes.
+      </p>
+      <dl class="vgrid">
+        <div>
+          <dt>Engineering quality</dt>
+          <dd class="yes">Strong</dd>
+        </div>
+        <div>
+          <dt>Signal quality</dt>
+          <dd>Unproven, and simpler than it presents</dd>
+        </div>
+        <div>
+          <dt>Risk controls</dt>
+          <dd class="no">The weakest part of the product</dd>
+        </div>
+        <div>
+          <dt>Ready to sell?</dt>
+          <dd class="no">No — no performance evidence exists</dd>
+        </div>
+      </dl>
+      <p style="font-size:16px;color:var(--ink-2)">
+        The build reads like serious work by someone who knows MQL4 well. The gap is not competence —
+        it is that the risk layer was left as an exercise and the model layer carries more
+        presentation than mechanism.
+      </p>
+    </div>
+  </section>
+
+  <!-- FINDINGS SUMMARY -->
+  <section id="summary">
+    <div class="sec-head">
+      <h2>21 findings</h2>
+      <span class="rail">§ 02</span>
+    </div>
+    <div class="sev-strip">
+      <div class="sev-card p0">
+        <span class="n">4</span>
+        <span class="lbl">P0 · Critical</span>
+        <span class="desc">Unprotected fill window, no loss caps, unbounded slippage, no instrument guard</span>
+      </div>
+      <div class="sev-card p1">
+        <span class="n">4</span>
+        <span class="lbl">P1 · High</span>
+        <span class="desc">The learning loop shuts itself off; input edits wipe user stops</span>
+      </div>
+      <div class="sev-card p2">
+        <span class="n">6</span>
+        <span class="lbl">P2 · Medium</span>
+        <span class="desc">Dead direction branch, instance collisions, init fragility</span>
+      </div>
+      <div class="sev-card p3">
+        <span class="n">7</span>
+        <span class="lbl">P3 · Low</span>
+        <span class="desc">Dead computation and write-only state</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- P0 -->
+  <section id="critical">
+    <div class="sec-head">
+      <h2>Critical</h2>
+      <span class="rail">§ 03 · P0</span>
+    </div>
+    <div class="stack">
+
+      <article class="finding p0">
+        <div class="fhead">
+          <span class="chip">P0-1</span>
+          <h3>Positions are opened with no stop, then protected afterwards</h3>
+          <span class="lines">line 1473</span>
+        </div>
+        <p>
+          <code>OrderSend</code> is called with SL and TP hardcoded to <code>0.0</code>. Protection
+          arrives only later, through <code>ApplyInputExits</code> → <code>ModifyActiveStops</code>.
+          Between the fill and the first successful <code>OrderModify</code> the position carries
+          no broker-side stop at all.
+        </p>
+        <p>
+          The retry path widens the window: each failure waits 2 seconds, and the fail-safe market
+          exit fires only after 5 attempts — roughly <b>10 seconds of unprotected exposure</b>,
+          followed by a close that itself retries on a backoff and needs the same trade context
+          that was already failing. The fail-safe is also gated on
+          <code>StopLoss_PriceUSD&nbsp;&gt;&nbsp;0.0</code>, so with a zero stop there is no
+          escalation whatsoever.
+        </p>
+        <div class="scenario">
+          <b>Failure scenario</b>
+          The EA fills a buy one second before a CPI print. The broker rejects <code>OrderModify</code>
+          through the spread blowout. Ten seconds later gold has moved $12 against the position, and
+          only then does the fail-safe attempt a market close — at whatever price an unlimited-slippage
+          close returns. Configured risk was $20; realised risk is unbounded.
+        </div>
+        <p class="fix"><b>Fix</b> — attempt stops inside <code>OrderSend</code>, fall back to the modify
+        path only when the broker rejects stops at open, and remove the zero-stop gate on the fail-safe.</p>
+      </article>
+
+      <article class="finding p0">
+        <div class="fhead">
+          <span class="chip">P0-2</span>
+          <h3>No daily loss limit — and the counter that exists is never enforced</h3>
+          <span class="lines">line 823</span>
+        </div>
+        <p>
+          <code>EntriesToday()</code> is substantial machinery: it persists a day key and count,
+          reconciles against the terminal's open orders <em>and</em> full history every 5 seconds,
+          and defends against under-counting after a crash. It is read in four places — telemetry,
+          a log line, the panel, and a warm-up call.
+        </p>
+        <p>
+          <b>It is never compared to a limit.</b> The panel renders the count followed by the literal
+          string <code>" (UNCAPPED)"</code>. There is no daily loss cap, no consecutive-loss cooldown,
+          no maximum trades per day, and no equity floor anywhere in the file.
+        </p>
+        <p>
+          This compounds with re-entry: <code>ResetForFreshCycle</code> re-arms the state machine on
+          close, and <code>OnTick</code> can open the next position on the very same tick.
+        </p>
+        <div class="scenario">
+          <b>Failure scenario</b>
+          Gold chops in a $25 band while M5 structure and ATR expansion both read as qualified. A trade
+          stops out at $20. Structure has not changed, so the same direction re-qualifies and the EA
+          re-enters. Repeat. Nothing in the code stops this running all session.
+        </div>
+        <p class="fix"><b>Fix</b> — enforce a daily realised-loss cap and a post-loss cooldown in
+        <code>AcquisitionEvidenceReady</code>. The counter and persistence layer already exist; only the
+        comparison is missing.</p>
+      </article>
+
+      <article class="finding p0">
+        <div class="fhead">
+          <span class="chip">P0-3</span>
+          <h3>Slippage is effectively unlimited, on entry as well as exit</h3>
+          <span class="lines">line 90</span>
+        </div>
+        <p>
+          <code>NO_EA_SLIPPAGE_CAP_POINTS = 1000000</code> is passed to both <code>OrderSend</code> and
+          <code>OrderClose</code>. On 2-digit gold that is a <b>$10,000 tolerance</b>. There is no
+          maximum-spread veto anywhere — the panel displays the spread, but nothing acts on it.
+        </p>
+        <p>
+          This is deliberate; <code>OnInit</code> announces "no EA spread/slippage veto; actual execution
+          costs remain auditable." Auditable after the fact is not the same as bounded. Note the
+          asymmetry: unlimited tolerance on the <em>exit</em> is defensible because it guarantees the
+          position closes. On the <em>entry</em> it is not — a rejected entry costs nothing.
+        </p>
+        <p class="fix"><b>Fix</b> — keep it on <code>OrderClose</code>, cap it on <code>OrderSend</code>,
+        and add a maximum-spread precondition to the entry.</p>
+      </article>
+
+      <article class="finding p0">
+        <div class="fhead">
+          <span class="chip">P0-4</span>
+          <h3>No instrument guard, on a model defined entirely in absolute USD</h3>
+          <span class="lines">lines 102–109</span>
+        </div>
+        <p>
+          Every threshold is an absolute price quantity, not a normalised one: a $20 stop, $7.50 minimum
+          remaining travel, a $30 calibration target, $15 adverse, and adverse clamps of $5–15 and $8–20.
+          There is <b>no check anywhere</b> that the chart symbol is gold — no symbol test, no
+          <code>Digits</code> test, no contract-size test. <code>OnInit</code> validates lot sizing and
+          nothing else.
+        </p>
+        <div class="scenario">
+          <b>Failure scenario</b>
+          Attached to EURUSD, <code>MIN_REMAINING_TRAVEL_USD = 7.50</code> means 7.50 <em>price units</em>
+          — 75,000 pips — against an expected-travel value clamped to [6, 60]. The gate can never be
+          satisfied and the EA silently never trades. On an index CFD the same constants are far too
+          tight instead. Either way the panel just reads <span class="mono">SCANNING FOR A DEVELOPING
+          MOVE</span> forever.
+        </div>
+        <p class="fix"><b>Fix</b> — validate contract size and tick value in <code>OnInit</code>, or use an
+        explicit symbol whitelist, and refuse to load otherwise.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- P1 -->
+  <section id="high">
+    <div class="sec-head">
+      <h2>High</h2>
+      <span class="rail">§ 04 · P1</span>
+    </div>
+    <div class="stack">
+
+      <article class="finding p1">
+        <div class="fhead">
+          <span class="chip">P1-1</span>
+          <h3>The calibration writes to a different bin than it reads from</h3>
+          <span class="lines">lines 587, 1503, 1533</span>
+        </div>
+        <p>
+          A concrete logic error, not a modelling opinion. The <b>read</b> side bins on the offline score:
+          <code>CalibrationBin(offlineProbability)</code>. The <b>write</b> side records the outcome into
+          the bin of the already-calibrated output: <code>CalibrationBin(decisionP30)</code>.
+        </p>
+        <p>
+          Because calibration blends the offline score <em>toward a lower posterior</em>, the output
+          frequently lands in a lower bin than the input. When it does, the bin the EA reads from stops
+          receiving outcomes — permanently. Simulated with a steady offline score of 0.150 and every trade
+          labelled MISS:
+        </p>
+        <pre>trade   1: readbin=1 writebin=1  calP30=0.1500  probQuality=0.846  <span class="dim">(n_read=1)</span>
+trade  20: readbin=1 writebin=1  calP30=0.1204  probQuality=0.618  <span class="dim">(n_read=20)</span>
+trade  50: readbin=1 <span class="hl">writebin=0</span>  calP30=0.1183  probQuality=0.603  <span class="hl">(n_read=20)</span>
+trade 200: readbin=1 <span class="hl">writebin=0</span>  calP30=0.1183  probQuality=0.603  <span class="hl">(n_read=20)</span>
+
+final counters per bin: [180, 20, 0, 0, 0]</pre>
+        <p>
+          Bin 1 freezes at 20 observations. The remaining 180 outcomes pile into bin 0, which these setups
+          never read. <code>calP30</code> is pinned at 0.1183 forever — the online calibration has silently
+          stopped calibrating.
+        </p>
+        <p class="fix"><b>Fix</b> — bin on the offline score on both sides. One line.</p>
+      </article>
+
+      <article class="finding p1">
+        <div class="fhead">
+          <span class="chip">P1-2</span>
+          <h3>Calibration counters never decay, so the entry gate tightens for life</h3>
+          <span class="lines">line 596</span>
+        </div>
+        <p>
+          Nothing ever decrements, ages, or caps the hit/miss counters. They live in terminal global
+          variables keyed by account and symbol, surviving restarts, recompiles and input changes
+          indefinitely, while <code>learnedWeight</code> only ever grows. Where read and write bins do
+          agree, the result is monotone decay rather than a freeze — <span class="mono">probQuality</span>
+          falls from 0.538 at trade 1 to 0.025 by trade 200.
+        </p>
+        <p>
+          That term carries weight 0.12 in <code>opportunityScore</code>, and entry requires 0.30. The
+          floor guaranteed by the other gates is only about 0.215:
+        </p>
+        <div class="tscroll">
+          <table>
+            <thead>
+              <tr><th>Term</th><th>Guaranteed at the entry gate</th><th>Contribution</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>structuralQuality</td><td class="mono">(0.7629 − 0.62) / 1.60 = 0.089</td><td class="num">0.025</td></tr>
+              <tr><td>motionQuality</td><td class="mono">1.0 — required by M5MotionAligned</td><td class="num">0.140</td></tr>
+              <tr><td>remainingQuality</td><td class="mono">7.50 / 30 = 0.25</td><td class="num">0.035</td></tr>
+              <tr><td>exhaustion headroom</td><td class="mono">1 − 0.78 = 0.22</td><td class="num">0.015</td></tr>
+              <tr><td><strong>Floor</strong></td><td><strong>vs. a required 0.30</strong></td><td class="num"><strong>0.215</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          So roughly 0.085 must come from the soft terms, of which the decaying probability term can
+          supply up to 0.12. The entry gate silently tightens over the EA's lifetime, with no user-visible
+          signal and no way to reset short of deleting global variables by hand.
+        </p>
+        <p class="fix"><b>Fix</b> — add a decay factor or rolling window, and expose a reset.</p>
+      </article>
+
+      <article class="finding p1">
+        <div class="fhead">
+          <span class="chip">P1-3</span>
+          <h3>The calibration label is unreachable by construction</h3>
+          <span class="lines">lines 1818–1823</span>
+        </div>
+        <p>
+          Success is a $30 favourable excursion. But the default stop is $20, and the model's own adverse
+          exit triggers at $8–20 against. Failure, meanwhile, is recorded on almost any terminating
+          condition: MAE ≥ $15, <em>or</em> any model exit reason at all, <em>or</em> age beyond the horizon.
+        </p>
+        <p>
+          The label is therefore biased toward MISS regardless of whether the signal had merit — which is
+          what drives both findings above. The learner is being fed a target its own risk management
+          prevents it from hitting.
+        </p>
+        <p class="fix"><b>Fix</b> — measure against a target the trade management can reach, or record
+        censored outcomes explicitly instead of folding them into MISS.</p>
+      </article>
+
+      <article class="finding p1">
+        <div class="fhead">
+          <span class="chip">P1-4</span>
+          <h3>Editing any input while a trade is open silently discards user-set stops</h3>
+          <span class="lines">lines 1227–1234</span>
+        </div>
+        <p>
+          <code>OnDeinit</code> with <code>REASON_PARAMETERS</code> writes a reconfigure flag. On re-init,
+          <code>RecoverActiveTrade</code> clears both manual-override flags, forces an exit sync, and
+          recomputes stops from the inputs — overwriting whatever is on the order.
+        </p>
+        <div class="scenario">
+          <b>Failure scenario</b>
+          A trade is $14 in profit. The user drags the stop to breakeven by hand, then opens the Inputs tab
+          to change <code>LotSize</code> for the <em>next</em> trade. On OK, the EA resets the stop to
+          entry − $20. A risk-free trade is risking $20 again, with no warning and no log line naming the
+          discarded level.
+        </div>
+        <p class="fix"><b>Fix</b> — preserve manual overrides across a parameter change, or warn explicitly
+        before overwriting.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- P2 / P3 -->
+  <section id="rest">
+    <div class="sec-head">
+      <h2>Medium and low</h2>
+      <span class="rail">§ 05 · P2 · P3</span>
+    </div>
+    <div class="stack">
+
+      <article class="finding p2">
+        <div class="fhead">
+          <span class="chip">P2-1</span>
+          <h3>The dual-direction tracker fallback is dead code</h3>
+          <span class="lines">lines 707–715, 1363</span>
+        </div>
+        <p>
+          <code>BestTrackerDirection()</code> returns the structural direction when it qualifies, and
+          otherwise falls through to an opportunity-score comparison. That fallback can never produce a
+          trade: its only consumer immediately calls <code>M5StructuralReady</code>, whose first line is
+          <code>if(direction != g_market.structuralDirection) return(false)</code>. If the fallback returns
+          the structural direction, that check already failed one line earlier; if it returns the opposite,
+          the guard rejects it.
+        </p>
+        <p>
+          <b>Search state can only ever advance on a single structural sign test.</b> The trackers still
+          matter as an entry filter — but at the point of choosing a side, the "dual-direction pursuit
+          engine" is not dual.
+        </p>
+      </article>
+
+      <div class="stack-tight">
+        <ul class="plain">
+          <li><b>P2-2 · Any foreign position blocks the EA silently.</b>
+            The block check ignores magic numbers entirely; the adoption check matches only the current
+            magic. A manual hedge, another EA, or a leftover v1/v2 position freezes this EA indefinitely
+            while the panel still reads <span class="mono">SCANNING</span>. The three magic-number paths
+            disagree with each other: legacy magics are recognised for counting only, adoption uses the
+            current magic, blocking uses none.</li>
+          <li><b>P2-3 · Two instances on one symbol corrupt each other.</b>
+            The persistence key is account + symbol + suffix — no chart ID, no timeframe. Two XAUUSD charts
+            share one namespace for ticket, stops, peak and calibration state, and both match the same magic.</li>
+          <li><b>P2-4 · <code>OnInit</code> hard-fails when broker symbol data isn't loaded yet.</b>
+            <code>MarketInfo</code> legitimately returns 0 at terminal startup and over the weekend; the EA
+            converts that into <code>INIT_PARAMETERS_INCORRECT</code> and never retries. It is dead until
+            manually re-attached — a real availability bug for an EA meant to run unattended.</li>
+          <li><b>P2-5 · A zero stop is accepted without warning.</b>
+            With both stop and take-profit at zero the position has no broker-side exit of any kind, and
+            the protection fail-safe is itself gated on a positive stop.</li>
+          <li><b>P2-6 · A full order-history scan every 5 seconds, for a display-only value.</b>
+            Driven by the 250 ms panel refresh. Worse in the strategy tester, where history grows
+            monotonically through the run.</li>
+          <li><b>P3 · Dead weight (7 items).</b>
+            Six of eight <code>DestinationProbability</code> evaluations per bar are never read;
+            <code>probabilityUp</code>/<code>Down</code> are write-only; both advertised
+            <code>BENCHMARK_*</code> constants are unused; <code>g_freshM1Bars</code> and
+            <code>g_resetTime</code> exist only to feed each other; <code>ReturnToSearch</code> ignores its
+            parameter; the M1 sigma is computed twice per bar; and mode probabilities survive session gaps
+            that reset everything else.</li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- WHAT IT GETS RIGHT -->
+  <section id="right">
+    <div class="sec-head">
+      <h2>What the code gets right</h2>
+      <span class="rail">§ 06</span>
+    </div>
+    <p style="margin-bottom:22px;color:var(--ink-2)">
+      Worth stating plainly, because it is the part worth keeping.
+    </p>
+    <ul class="plain good">
+      <li><b>No repainting.</b> Every indicator and price read uses shift ≥ 1. Backtest results will not be
+        inflated by look-ahead — the single most common defect in EAs of this type, and a claim most
+        competitors cannot make.</li>
+      <li><b>The barrier mathematics is correct.</b> The two-sided first-passage formula and the
+        reflection-principle hit-by-horizon formula both match the standard results, with consistent
+        per-minute units, and the Abramowitz–Stegun CDF handles the negative tail properly.</li>
+      <li><b>The regime transition prior is valid.</b> <code>0.72·pᵢ + 0.28·(1−pᵢ)/4</code> is a proper
+        row-stochastic mix: 0.72 self-persistence, 0.07 to each alternative.</li>
+      <li><b>Division-by-zero discipline is consistent.</b> ATR and sigma floored at <code>Point</code>,
+        path-length guards, guarded tick size — no unguarded divide anywhere in the file.</li>
+      <li><b>Tick-count wraparound is handled correctly</b> via unsigned arithmetic, a detail most MQL4
+        code gets wrong.</li>
+      <li><b>Crash and restart recovery is thorough.</b> Persisted state is validated against the live
+        ticket before being trusted, mode probabilities are renormalised on restore, and the entry counter
+        explicitly defends against a crash between fill and increment.</li>
+      <li><b>Session-gap handling is correct.</b> Both gap branches refuse to inject the cross-gap price
+        jump into CUSUM or thesis evidence — a subtle failure mode that is easy to miss.</li>
+    </ul>
+  </section>
+
+  <!-- PRODUCT -->
+  <section id="product">
+    <div class="sec-head">
+      <h2>What the product actually is</h2>
+      <span class="rail">§ 07 · Product</span>
+    </div>
+    <div class="stack">
+      <div class="verdict" style="border-left-color:var(--gold)">
+        <p class="verdict-line" style="font-size:19px;font-weight:560">
+          An EMA20/EMA30 ribbon trend filter on M5, gated by ATR expansion, requiring three-way agreement
+          between ribbon slope, price-to-EMA gap and 3-bar velocity — entering with a fixed $20 stop, no
+          take-profit, and exiting on an evidence-decay rule.
+        </p>
+        <p style="font-size:16px;color:var(--ink-2)">
+          That is a legitimate, recognisable strategy. It is not what the file presents itself as.
+          Everything that decides direction flows through one equal-weight average of four winsorized
+          z-scores. Everything else is a modifier, or inert.
+        </p>
+      </div>
+
+      <div class="tscroll">
+        <table>
+          <thead>
+            <tr><th>Component</th><th>Presented as</th><th>Actual influence on the decision</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Barrier probability, first-passage, normal CDF</td>
+              <td>Core probability engine</td>
+              <td><strong style="color:var(--crit)">≤ 3.7% of the entry threshold</strong></td>
+            </tr>
+            <tr>
+              <td>5-mode regime classifier</td>
+              <td>Regime awareness</td>
+              <td>Real but modest — damping and score adjustments</td>
+            </tr>
+            <tr>
+              <td>Dual-direction tracker scoring</td>
+              <td>"Dual-direction pursuit engine"</td>
+              <td><strong style="color:var(--crit)">Dead for direction selection</strong> (P2-1)</td>
+            </tr>
+            <tr>
+              <td>Online Bayesian calibration</td>
+              <td>Learns from live outcomes</td>
+              <td><strong style="color:var(--crit)">Provably stops learning</strong> (P1-1)</td>
+            </tr>
+            <tr>
+              <td>CUSUM change detection</td>
+              <td>Regime break detection</td>
+              <td>Small — 0.05 coefficient in the logit</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <article class="finding p1" style="--band:var(--gold);--chip-bg:var(--gold-soft)">
+        <div class="fhead">
+          <span class="chip">Quantified</span>
+          <h3>The sophistication is decorative</h3>
+        </div>
+        <p>
+          The EA computes eight destination probabilities every M1 bar, each running two first-passage
+          formulas, a normal CDF and several exponentials. <b>Six are never read.</b> The two that are enter
+          the decision through a single coefficient of 0.012:
+        </p>
+        <div class="tscroll">
+          <table>
+            <thead><tr><th>Step</th><th>Maximum influence</th></tr></thead>
+            <tbody>
+              <tr><td>Contribution to the offline score</td><td class="num">≤ 0.012</td></tr>
+              <tr><td>→ probabilityQuality</td><td class="num">≤ 0.092</td></tr>
+              <tr><td>→ opportunityScore (weight 0.12)</td><td class="num">≤ 0.011</td></tr>
+              <tr><td><strong>→ share of the 0.30 entry gate</strong></td><td class="num"><strong>≤ 3.7%</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The entire stochastic-process layer can move the entry decision by under four percent of the
+          threshold it feeds. A customer paying for "causal probability modelling" is paying for a
+          rounding term.
+        </p>
+      </article>
+
+      <div class="stack-tight">
+        <ul class="plain">
+          <li><b>An overfitting signal in plain sight.</b>
+            <code>STRUCTURAL_SCORE_THRESHOLD = 0.7629589434</code> — ten significant figures on a threshold
+            applied to a four-term average. On the mean of four unit-variance inputs that sits between 0.76σ
+            (perfectly correlated) and 1.53σ (independent); since EMA gap, ribbon velocity and 3-bar velocity
+            all measure the same move, the truth is nearer the correlated end. It is roughly a one-sigma
+            trend filter, dressed as a calibrated threshold.</li>
+          <li><b>No learned weights exist.</b> The "frozen train-only standardization" is a plain unweighted
+            mean. The only fitted artifacts in the entire file are eight winsorization bounds, four means
+            and four standard deviations. The code references a holdout — that evidence does not ship with
+            the product, so none of it can be claimed.</li>
+          <li><b>The advertised benchmark is not implemented.</b> Both benchmark constants appear nowhere
+            else in the file. The panel's <span class="mono">"BENCHMARK $50 LEG | $15 REVERSAL"</span> is a
+            hardcoded display string; no code path targets a $50 leg or enforces a $15 reversal.</li>
+          <li><b>The entry bar sits well below the risk taken.</b> The EA will accept a trade whose own
+            model says $7.50 of travel remains, while risking $20 — roughly 2.7:1 against, requiring a ~73%
+            hit rate merely to break even before costs.</li>
+          <li><b>Credit where due: the exit rules protect the right tail.</b> With no take-profit, the payoff
+            depends on letting winners run, and the exits are built for that — the stale-horizon exit only
+            fires when MFE is under $15, and failure-to-launch needs three invalidation bars plus weak
+            evidence. Winners are not cut short by design. The problem is that unlimited entry slippage and
+            no spread filter attack exactly the thin edge this payoff profile depends on.</li>
+          <li><b>Expect it to get quieter, then expect a support ticket.</b> Entry needs roughly eight
+            conditions to hold at once, and the calibration ratchet tightens the gate further over time —
+            invisibly from the panel, and resettable only by hand-deleting terminal global variables.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLAIMS -->
+  <section id="claims">
+    <div class="sec-head">
+      <h2>Claims</h2>
+      <span class="rail">§ 08</span>
+    </div>
+    <div class="claims">
+      <div class="can">
+        <h3>Defensible today</h3>
+        <ul>
+          <li>MT4 EA for XAUUSD, M5 structure with M1 tracking, one position at a time</li>
+          <li>Trend-following entries on an EMA20/30 ribbon with ATR-expansion confirmation</li>
+          <li>Fixed-dollar stop, optional profit lock and trailing, user-owned exit settings</li>
+          <li>Survives terminal restarts and reconciles its state against the broker</li>
+          <li>Uses only closed bars — <b>no repainting</b>, and verifiable in the source</li>
+          <li>Writes a per-trade telemetry CSV for independent auditing</li>
+        </ul>
+      </div>
+      <div class="cant">
+        <h3>Not defensible</h3>
+        <ul>
+          <li>Any win rate, drawdown, profit factor or return figure</li>
+          <li>"Adaptive" or "learns from live outcomes" — the loop is broken</li>
+          <li>"$50 leg / $15 reversal benchmark" — not implemented</li>
+          <li>"Probability-calibrated" — the layer moves the decision by under 4%</li>
+          <li>"Dual-direction pursuit engine" — it is a single sign test</li>
+          <li>Anything implying capped or known risk per day</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- PATH -->
+  <section id="path">
+    <div class="sec-head">
+      <h2>Path to a sellable product</h2>
+      <span class="rail">§ 09</span>
+    </div>
+    <div class="stages">
+      <div class="stage">
+        <span class="idx">01</span>
+        <div>
+          <h3>Make it safe</h3>
+          <p style="font-size:15.5px;color:var(--ink-2)">
+            All four P0 items: send stops with the order, add a daily loss cap and post-loss cooldown, cap
+            entry slippage and gate on spread, guard the instrument. None of this touches the model.
+          </p>
+          <span class="est">≈ 1 day</span>
+        </div>
+      </div>
+      <div class="stage">
+        <span class="idx">02</span>
+        <div>
+          <h3>Make it honest</h3>
+          <p style="font-size:15.5px;color:var(--ink-2)">
+            Fix the bin mismatch, give the counters decay and a reset, redefine the calibration label, and
+            either wire in or delete the inert probability layer. Then rewrite the description to match the
+            code. "EMA ribbon + ATR expansion with evidence-based exits" is an easier product to sell
+            honestly than a "causal probability engine" a technical customer can disprove in twenty minutes.
+          </p>
+          <span class="est">≈ 2–3 days</span>
+        </div>
+      </div>
+      <div class="stage gate">
+        <span class="idx">03</span>
+        <div>
+          <h3>Make it provable — this is the real gate</h3>
+          <p style="font-size:15.5px;color:var(--ink-2)">
+            Tick-data backtest at 99% modelling quality with realistic spread and commission across ≥ 3
+            years including the 2020 and 2022 gold regimes — with unlimited slippage in the code, anything
+            less is meaningless. Then walk-forward validation that re-derives the standardization constants
+            and the structural threshold per window rather than reusing 0.7629589434. Then 90 days minimum
+            of demo forward-testing on the intended broker, using the telemetry CSV as the record; given the
+            low expected trade frequency, a shorter window will not produce a meaningful sample. Publish
+            trade count, win rate, average win/loss, max drawdown and profit factor against the exact build
+            they came from.
+          </p>
+          <span class="est">≈ 4–8 weeks · not optional</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="closing">
+    <p>
+      Fix the four safety items, repair the learning loop, describe the strategy as what it is — then
+      forward-test it before any of it is sold.
+    </p>
+  </div>
+
+  <footer>
+    Static source audit · no compilation, backtest, or live data · 21 findings<br>
+    Companion files: AUDIT.md · PRODUCT_REPORT.md · calibration_reproducer.py · GoldSeekAdaptiveEA_v3.mq4
+  </footer>
+
+</div>
