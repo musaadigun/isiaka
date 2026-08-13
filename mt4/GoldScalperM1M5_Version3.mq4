@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldScalperM1M5_Version2.mq4                                       |
+//| GoldScalperM1M5_Version3.mq4                                       |
 //| M1/M5 gold entry engine. It decides WHEN to enter; the user owns   |
 //| the trade once it is open.                                         |
 //|                                                                    |
@@ -28,10 +28,13 @@
 //| AutoTrading OFF to observe signals without trading.                |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "2.10"
+#property version   "3.00"
 #property description "M1/M5 gold scalper: CUSUM burst entries, regime-routed, scratch-first exits."
 #property description "Entries by CUSUM burst + regime router. Exits are owned entirely by the user inputs."
-// v2.10: Removed at the user's instruction - no-chase limit, daily
+// Version numbering: the file name and #property version step up on
+// every change. Version 3 = this build.
+//
+// v3.00: Removed at the user's instruction - no-chase limit, daily
 //        loss brake, manual-position block, session filter, Friday
 //        cutoff, fast cut, failure-to-launch, opposite-signal exit.
 //        Promoted to inputs - spread ceiling, daily trade cap,
@@ -1103,7 +1106,7 @@ void CreatePanel()
    Comment("");
    PanelBox("BG",PANEL_LEFT,PANEL_TOP,PANEL_WIDTH,PANEL_HEIGHT,
             PANEL_BG,PANEL_BORDER,0);
-   PanelText("Title","XVISION  |  GOLD SCALPER M1/M5 V2",PANEL_LABEL_X,22,
+   PanelText("Title","XVISION  |  GOLD SCALPER M1/M5 V3",PANEL_LABEL_X,22,
              PANEL_TITLE,13);
    PanelText("Subtitle","M1 TRIGGER  |  M5 CONTEXT  |  YOUR EXITS",PANEL_LABEL_X,42,
              PANEL_MUTED,9);

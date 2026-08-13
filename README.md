@@ -1,17 +1,27 @@
 # isiaka — GoldScalper M1/M5
 
-An MT4 Expert Advisor that scalps XAUUSD on the 1-minute chart with
-5-minute context, built for many trades a day with losses engineered
-small: every trade must confirm within seconds or it is scratched by
-software long before the broker-side stop is touched.
+An MT4 Expert Advisor that finds XAUUSD entries on the 1-minute chart
+with 5-minute context. It decides **when to enter**; you own the trade
+once it is open. The EA closes nothing on its own — every exit comes
+from your stop loss, take profit, profit lock or trailing stop.
+
+Current build: **Version 3**.
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `mt4/GoldScalperM1M5_Version2.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
+| `mt4/GoldScalperM1M5_Version3.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
+| `mt4/panel_preview.svg` | Pixel-accurate mock of the on-chart panel. |
 | `backtest/` | Tick-replay backtester + free Dukascopy data downloader. |
 | `reference/` | The five prior builds this EA was mined from. |
+
+## Versioning
+
+Every change ships as a new numbered file — `..._Version3.mq4`,
+`..._Version4.mq4`, and so on — with `#property version` and the panel
+title stepped to match. Old versions stay in the repository so any
+build can be recompiled or compared.
 
 ## How the EA works
 
@@ -29,45 +39,58 @@ software long before the broker-side stop is touched.
   gold failed stability tests in the prior research cycle; it stays off
   until the tick backtest earns it a place.
 
-**Exits** — the near-zero-loss machinery, in firing order:
+**Exits — entirely yours.** There is no time stop, no fast cut, no
+confirm-or-scratch and no reversal exit. A position ends on:
 
-1. Fast cut at −$0.80 (software, tick-speed; frozen system rule)
-2. Confirm-or-scratch: not +$0.30 within 90 s → out (frozen system rule)
-3. Your profit lock (`LockTrigger`/`LockedProfit`), your trailing stop
-   (`TrailingStart`/`TrailingDistance`), your optional fixed TP
-4. Opposite qualified signal → out
-5. Your broker-side SL (`StopLoss_PriceUSD`, default −$2.50) —
-   disconnect insurance only
+1. Your profit lock (`LockTrigger_PriceUSD` / `LockedProfit_PriceUSD`)
+2. Your trailing stop (`TrailingStart_PriceUSD` / `TrailingDistance_PriceUSD`)
+3. Your take profit (`TakeProfit_PriceUSD`)
+4. Your stop loss (`StopLoss_PriceUSD`)
+5. You, closing it by hand
 
-**Inputs** — the Inputs tab carries only what belongs to the user:
-lot size, SL, TP, profit lock (trigger + locked amount) and trailing
-stop (start + distance). Everything else — signal engine, regime
-router, rails, scratch engine — is a frozen constant in the source,
-changed only with new backtest evidence.
+Set all of those to zero and nothing but you will ever close a trade.
 
-**Rails**: spread ceiling, no-chase cap, cooldown, session windows,
-news blackout windows, Friday cutoff, daily trade cap, daily loss brake
-(percent of balance and/or absolute), consecutive-loss pause. One
-position at a time. Sizing risks a fixed percent at the *hard* stop, so
-the typical scratch loses a small fraction of that.
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `LotSize` | 0.01 | fixed lot per trade |
+| `StopLoss_PriceUSD` | 2.50 | broker-side SL; 0 = none |
+| `TakeProfit_PriceUSD` | 0.00 | fixed TP; 0 = off |
+| `LockTrigger_PriceUSD` | 0.60 | profit at which the lock arms; 0 = off |
+| `LockedProfit_PriceUSD` | 0.10 | SL moves to entry ± this once armed |
+| `TrailingStart_PriceUSD` | 0.90 | profit at which trailing begins; 0 = off |
+| `TrailingDistance_PriceUSD` | 0.60 | gap the stop trails behind price |
+| `MaxSpread_PriceUSD` | 0.35 | no entry above this spread; 0 = no ceiling |
+| `MaxTradesPerDay` | 15 | 0 = uncapped |
+| `MaxConsecutiveLosses` | 3 | pause after this streak; 0 = off |
+| `LossPauseMinutes` | 90 | length of that pause; 0 = down for the day |
+
+All `*_PriceUSD` values are absolute gold price movements ($0.80 = 80
+cents of XAUUSD price).
+
+**Frozen in the source** (edit the const block to change): 120-second
+cooldown between entries, one position at a time, the regime and signal
+gates, news blackout windows (empty by default), close-if-the-broker-
+rejects-the-stop, and the gold-symbol lock.
 
 **Instrumentation**: an on-chart panel that always names the exact gate
 currently blocking entry, and a CSV trade ledger in `MQL4/Files`.
 
 ## Deploying
 
-1. Copy `mt4/GoldScalperM1M5_Version2.mq4` to `MQL4/Experts`, compile
+1. Copy `mt4/GoldScalperM1M5_Version3.mq4` to `MQL4/Experts`, compile
    (F7), attach to a **XAUUSD M1** chart.
 2. Arming is MT4's own switch: with AutoTrading OFF the EA runs in
    standby, showing every signal and blocker without trading. Turn
    AutoTrading ON to trade.
-3. Session windows are a frozen constant in **broker time** (defaults
-   assume a GMT+2/+3 broker: London morning + NY session) — edit
-   `SESSION_WINDOWS` in the source if your broker clock differs.
+3. Set your exits. The defaults are scalp-scale ($0.60 lock, $0.90
+   trail); if you are trading for $10–50 moves, widen them to match or
+   the trail will close winners early.
 4. Order of operations: backtest → demo → small live. Numbers come from
    the backtester (see `backtest/README.md`), not from hope.
 
-All `*_USD` inputs are absolute gold price movements ($0.80 = 80 cents
-of XAUUSD price). Defaults assume a raw-spread account; on a standard
-account with $0.30+ spreads, widen the targets or the spread ceiling
-will (correctly) keep the EA out of the market.
+Defaults assume a raw-spread account. On a standard account with $0.30+
+spreads, either widen your targets or raise `MaxSpread_PriceUSD` — at a
+$0.35 ceiling a wide-spread account will (correctly) keep the EA out of
+the market most of the time.

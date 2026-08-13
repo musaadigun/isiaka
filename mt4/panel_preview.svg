@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="470" height="526" viewBox="0 0 470 526">
-  <!-- Pixel-accurate preview of the GoldScalper v2 panel: same geometry
+  <!-- Pixel-accurate preview of the GoldScalper V3 panel: same geometry
        (430x486 at 10,14), same palette, same row baselines as the EA. -->
   <rect width="470" height="526" fill="#2b2b2b"/>
   <g font-family="Arial, Helvetica, sans-serif">
@@ -7,8 +7,8 @@
     <rect x="10" y="14" width="430" height="486" fill="#0d1017" stroke="#37404f" stroke-width="1"/>
 
     <!-- header -->
-    <text x="26" y="35" fill="#ffda00" font-size="17" font-weight="bold">XVISION  |  GOLD SCALPER M1/M5 V2</text>
-    <text x="26" y="53" fill="#8097be" font-size="12">M1 TRIGGER  |  M5 CONTEXT  |  ONE TRADE</text>
+    <text x="26" y="35" fill="#ffda00" font-size="17" font-weight="bold">XVISION  |  GOLD SCALPER M1/M5 V3</text>
+    <text x="26" y="53" fill="#8097be" font-size="12">M1 TRIGGER  |  M5 CONTEXT  |  YOUR EXITS</text>
     <rect x="26" y="58" width="394" height="1" fill="#414d60"/>
 
     <!-- STATUS -->
@@ -33,10 +33,10 @@
     <text x="424" y="226" fill="#00e660" font-size="12" text-anchor="end">$0.60 / $0.10</text>
     <text x="26" y="243" fill="#aeb8c9" font-size="12">Trailing start / distance</text>
     <text x="424" y="243" fill="#00e660" font-size="12" text-anchor="end">$0.90 / $0.60</text>
-    <text x="26" y="260" fill="#aeb8c9" font-size="12">Fast cut / launch window</text>
-    <text x="424" y="260" fill="#e1e6f0" font-size="12" text-anchor="end">$0.80 / +$0.30 in 90s</text>
+    <text x="26" y="260" fill="#aeb8c9" font-size="12">Spread ceiling / daily cap</text>
+    <text x="424" y="260" fill="#e1e6f0" font-size="12" text-anchor="end">$0.35 / 15</text>
     <text x="26" y="277" fill="#aeb8c9" font-size="12">Exit ownership</text>
-    <text x="424" y="277" fill="#e1e6f0" font-size="12" text-anchor="end">EA scratch + EA SL</text>
+    <text x="424" y="277" fill="#e1e6f0" font-size="12" text-anchor="end">EA SL + trail</text>
 
     <!-- ENGINE -->
     <text x="26" y="296" fill="#37a9ff" font-size="12">ENGINE</text>
@@ -55,14 +55,14 @@
     <text x="424" y="391" fill="#ffa820" font-size="12" text-anchor="end">2026.08.13 18:27:41</text>
     <text x="26" y="408" fill="#aeb8c9" font-size="12">Live Bid / Ask</text>
     <text x="424" y="408" fill="#e1e6f0" font-size="12" text-anchor="end">4373.21 / 4373.36</text>
-    <text x="26" y="425" fill="#aeb8c9" font-size="12">Spread / trading permission</text>
+    <text x="26" y="425" fill="#aeb8c9" font-size="12">Spread / permission</text>
     <text x="424" y="425" fill="#00e660" font-size="12" text-anchor="end">0.15 (max 0.35) / ENABLED</text>
-    <text x="26" y="442" fill="#aeb8c9" font-size="12">Session / blackout / Friday</text>
-    <text x="424" y="442" fill="#00e660" font-size="12" text-anchor="end">OPEN / clear / ok</text>
+    <text x="26" y="442" fill="#aeb8c9" font-size="12">News blackout / loss pause</text>
+    <text x="424" y="442" fill="#00e660" font-size="12" text-anchor="end">clear / clear</text>
 
     <!-- footer -->
     <rect x="26" y="452" width="394" height="1" fill="#414d60"/>
-    <text x="26" y="470" fill="#e1e6f0" font-size="12">TODAY   trades 0/15   PnL +0.00   streak 0/3   brake -32</text>
+    <text x="26" y="470" fill="#e1e6f0" font-size="12">TODAY   trades 0/15   PnL +0.00   streak 0/3</text>
     <text x="26" y="490" fill="#8097be" font-size="11">LAST: attached</text>
   </g>
 </svg>
