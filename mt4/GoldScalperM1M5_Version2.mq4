@@ -30,7 +30,9 @@
 #property description "User inputs: lot, SL, TP, profit lock, trailing stop. System rules are frozen."
 // v2.00: Inputs reduced to user trade management (GoldSeek-style);
 //        MaxHold time stop removed; partial banking removed; trailing
-//        is now a manual fixed distance; compiler warnings silenced.
+//        is now a manual fixed distance. Day-cache scratch buffers are
+//        file-scope so the build is warning-free (MQL4 cannot prove a
+//        loop initialised a local array).
 // v1.01: audit fixes (daily-cap double count, manual-position guard,
 //        fast-cut debounce, panel throttle, orphan sweep).
 
@@ -144,6 +146,14 @@ int      g_cacheHistoryTotal=-1, g_cacheOpenTotal=-1;
 int      g_tradesToday=0, g_consecLosses=0;
 double   g_closedPnLToday=0.0;
 datetime g_lastLossClose=0;
+// Scratch buffers for RefreshDayCache. File scope, not local: MQL4
+// statically zero-initialises globals, while its flow analysis cannot
+// prove a loop initialised a local array ("possible use of
+// uninitialized variable"). Both are refilled from index 0 on every
+// refresh, so no stale value is ever read.
+datetime g_dcCloseTimes[200];
+double   g_dcProfits[200];
+datetime g_dcOpens[400];
 
 // ------------------------ parsed schedules --------------------------
 int      g_sessStart[GS_MAX_WINDOWS], g_sessEnd[GS_MAX_WINDOWS];
@@ -555,14 +565,8 @@ void RefreshDayCache()
    if(start==g_dayStart && historyTotal==g_cacheHistoryTotal && openTotal==g_cacheOpenTotal)
       return;
 
-   datetime closeTimes[200];
-   double   profits[200];
-   datetime opens[400];
-   int      z=0;
-   for(z=0;z<200;z++) { closeTimes[z]=0; profits[z]=0.0; }
-   for(z=0;z<400;z++) opens[z]=0;
-   int      n=0;
-   int      oc=0;
+   int    n=0;
+   int    oc=0;
    double pnl=0.0;
 
    for(int h=OrdersHistoryTotal()-1;h>=0;h--)
@@ -570,13 +574,13 @@ void RefreshDayCache()
       if(!OrderSelect(h,SELECT_BY_POS,MODE_HISTORY)) continue;
       if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MAGIC_NUMBER) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
-      if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
+      if(OrderOpenTime()>=start && oc<400) g_dcOpens[oc++]=OrderOpenTime();
       if(OrderCloseTime()>=start && n<200)
       {
          double p=OrderProfit()+OrderSwap()+OrderCommission();
          pnl+=p;
-         closeTimes[n]=OrderCloseTime();
-         profits[n]=p;
+         g_dcCloseTimes[n]=OrderCloseTime();
+         g_dcProfits[n]=p;
          n++;
       }
    }
@@ -585,7 +589,7 @@ void RefreshDayCache()
       if(!OrderSelect(t,SELECT_BY_POS,MODE_TRADES)) continue;
       if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MAGIC_NUMBER) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
-      if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
+      if(OrderOpenTime()>=start && oc<400) g_dcOpens[oc++]=OrderOpenTime();
    }
 
    // Tickets split by partial/manual partial closes share an open time:
@@ -594,35 +598,35 @@ void RefreshDayCache()
    int trades=0;
    if(oc>0)
    {
-      ArraySort(opens,oc,0,MODE_ASCEND);
+      ArraySort(g_dcOpens,oc,0,MODE_ASCEND);
       trades=1;
       for(int u=1;u<oc;u++)
-         if(opens[u]!=opens[u-1]) trades++;
+         if(g_dcOpens[u]!=g_dcOpens[u-1]) trades++;
    }
 
    // sort today's closed trades by close time (insertion sort, n is small)
    for(int i=1;i<n;i++)
    {
-      datetime ct=closeTimes[i];
-      double pf=profits[i];
+      datetime ct=g_dcCloseTimes[i];
+      double pf=g_dcProfits[i];
       int j=i-1;
-      while(j>=0 && closeTimes[j]>ct)
+      while(j>=0 && g_dcCloseTimes[j]>ct)
       {
-         closeTimes[j+1]=closeTimes[j];
-         profits[j+1]=profits[j];
+         g_dcCloseTimes[j+1]=g_dcCloseTimes[j];
+         g_dcProfits[j+1]=g_dcProfits[j];
          j--;
       }
-      closeTimes[j+1]=ct;
-      profits[j+1]=pf;
+      g_dcCloseTimes[j+1]=ct;
+      g_dcProfits[j+1]=pf;
    }
    int streak=0;
    datetime lastLoss=0;
    for(int s=n-1;s>=0;s--)
    {
-      if(profits[s]<0.0)
+      if(g_dcProfits[s]<0.0)
       {
          streak++;
-         if(lastLoss==0) lastLoss=closeTimes[s];
+         if(lastLoss==0) lastLoss=g_dcCloseTimes[s];
       }
       else break;
    }
