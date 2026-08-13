@@ -34,20 +34,23 @@ class Config:
     # sizing / catastrophe stop
     risk_percent: float = 0.5
     hard_stop_usd: float = 2.50
-    # scalp exit engine
+    # scalp exit engine (v2.00 EA: lock/trail/TP are the user inputs;
+    # max hold and partial banking were removed from the EA - keep the
+    # mechanisms here for experiments but default them off)
     scratch_adverse_usd: float = 0.80
     launch_window_seconds: int = 90
     launch_progress_usd: float = 0.30
-    breakeven_at_usd: float = 0.60
-    breakeven_lock_usd: float = 0.10
-    use_partial_bank: bool = True
+    take_profit_usd: float = 0.0
+    breakeven_at_usd: float = 0.60       # EA: LockTrigger_PriceUSD
+    breakeven_lock_usd: float = 0.10     # EA: LockedProfit_PriceUSD
+    use_partial_bank: bool = False
     partial_at_usd: float = 0.70
     partial_percent: float = 50.0
-    trail_start_usd: float = 0.90
-    trail_atr_period: int = 14
-    trail_atr_mult: float = 1.2
-    max_hold_minutes: int = 12
+    trail_start_usd: float = 0.90        # EA: TrailingStart_PriceUSD
+    trailing_distance_usd: float = 0.60  # EA: TrailingDistance_PriceUSD
+    max_hold_minutes: int = 0
     exit_on_opposite: bool = True
+    fixed_lots: float = 0.0              # >0 mirrors the EA's LotSize; 0 = risk-based sizing
     # entry rails
     max_spread_usd: float = 0.35
     max_chase_usd: float = 0.30
@@ -468,6 +471,8 @@ class Backtester:
     # ---------------- execution ----------------
     def size_lots(self):
         cfg = self.cfg
+        if cfg.fixed_lots > 0:
+            return cfg.fixed_lots if cfg.fixed_lots >= cfg.min_lot else 0.0
         risk = self.balance * cfg.risk_percent / 100.0
         per_lot = cfg.hard_stop_usd * cfg.contract_size
         if per_lot <= 0:
@@ -542,13 +547,18 @@ class Backtester:
         if pos.direction < 0 and ask >= stop:
             self.close_position(t_s, max(stop, ask), label)
             return
-        # fade target
-        if pos.fade_target > 0.0:
-            if pos.direction > 0 and bid >= pos.fade_target:
-                self.close_position(t_s, bid, "FADE TARGET")
+        # fixed take profit (user TP wins over the fade mean target)
+        tp = 0.0
+        if cfg.take_profit_usd > 0.0:
+            tp = pos.entry + pos.direction * cfg.take_profit_usd
+        elif pos.fade_target > 0.0:
+            tp = pos.fade_target
+        if tp > 0.0:
+            if pos.direction > 0 and bid >= tp:
+                self.close_position(t_s, bid, "TAKE PROFIT")
                 return
-            if pos.direction < 0 and ask <= pos.fade_target:
-                self.close_position(t_s, ask, "FADE TARGET")
+            if pos.direction < 0 and ask <= tp:
+                self.close_position(t_s, ask, "TAKE PROFIT")
                 return
         # software fast cut: two consecutive breaches, so a one-tick
         # spread blip cannot scratch a healthy trade (mirrors the EA)
@@ -584,12 +594,11 @@ class Backtester:
         desired = None
         if cfg.breakeven_at_usd > 0 and pos.max_fav >= cfg.breakeven_at_usd:
             desired = pos.entry + pos.direction * cfg.breakeven_lock_usd
-        if cfg.trail_start_usd > 0 and pos.max_fav >= cfg.trail_start_usd:
-            a = atr(self.m1, cfg.trail_atr_period)
-            if a > 0:
-                trail = exit_px - pos.direction * a * cfg.trail_atr_mult
-                if desired is None or pos.direction * (trail - desired) > 0:
-                    desired = trail
+        if (cfg.trail_start_usd > 0 and cfg.trailing_distance_usd > 0
+                and pos.max_fav >= cfg.trail_start_usd):
+            trail = exit_px - pos.direction * cfg.trailing_distance_usd
+            if desired is None or pos.direction * (trail - desired) > 0:
+                desired = trail
         if desired is not None:
             current = pos.stop if pos.stop != 0.0 else pos.hard_stop
             if pos.direction * (desired - current) > 0:

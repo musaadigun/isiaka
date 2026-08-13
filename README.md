@@ -31,11 +31,19 @@ software long before the broker-side stop is touched.
 
 **Exits** — the near-zero-loss machinery, in firing order:
 
-1. Fast cut at −$0.80 (software, tick-speed)
-2. Confirm-or-scratch: not +$0.30 within 90 s → out
-3. Breakeven lock at +$0.60, partial bank at +$0.70, M1-ATR trail from +$0.90
-4. Max hold 12 min; opposite qualified signal → out
-5. Broker-side hard stop at −$2.50 — disconnect insurance only
+1. Fast cut at −$0.80 (software, tick-speed; frozen system rule)
+2. Confirm-or-scratch: not +$0.30 within 90 s → out (frozen system rule)
+3. Your profit lock (`LockTrigger`/`LockedProfit`), your trailing stop
+   (`TrailingStart`/`TrailingDistance`), your optional fixed TP
+4. Opposite qualified signal → out
+5. Your broker-side SL (`StopLoss_PriceUSD`, default −$2.50) —
+   disconnect insurance only
+
+**Inputs** — the Inputs tab carries only what belongs to the user:
+lot size, SL, TP, profit lock (trigger + locked amount) and trailing
+stop (start + distance). Everything else — signal engine, regime
+router, rails, scratch engine — is a frozen constant in the source,
+changed only with new backtest evidence.
 
 **Rails**: spread ceiling, no-chase cap, cooldown, session windows,
 news blackout windows, Friday cutoff, daily trade cap, daily loss brake
@@ -50,10 +58,12 @@ currently blocking entry, and a CSV trade ledger in `MQL4/Files`.
 
 1. Copy `mt4/GoldScalperM1M5.mq4` to `MQL4/Experts`, compile (F7),
    attach to a **XAUUSD M1** chart.
-2. The EA attaches **disarmed** (`EnableTrading=false`): it shows every
-   signal and blocker without trading. Watch it, then arm deliberately.
-3. Set `SessionWindows` in **broker time** (defaults assume a GMT+2/+3
-   broker: London morning + NY session).
+2. Arming is MT4's own switch: with AutoTrading OFF the EA runs in
+   standby, showing every signal and blocker without trading. Turn
+   AutoTrading ON to trade.
+3. Session windows are a frozen constant in **broker time** (defaults
+   assume a GMT+2/+3 broker: London morning + NY session) — edit
+   `SESSION_WINDOWS` in the source if your broker clock differs.
 4. Order of operations: backtest → demo → small live. Numbers come from
    the backtester (see `backtest/README.md`), not from hope.
 

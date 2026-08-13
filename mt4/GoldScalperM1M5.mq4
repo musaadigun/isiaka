@@ -2,122 +2,105 @@
 //| GoldScalperM1M5.mq4                                                |
 //| M1/M5 gold scalper. One position at a time, many trades a day,     |
 //| losses engineered small: any trade that fails to confirm is        |
-//| scratched by software long before the broker-side catastrophe      |
-//| stop is ever touched.                                              |
+//| scratched by software long before the broker-side stop is touched. |
 //|                                                                    |
-//| Lineage (see /reference in the repo):                              |
-//|   execution/protection layer . XVISION Gold Velocity V7            |
-//|   five-mode regime engine + CUSUM burst + failure-to-launch exit   |
-//|                             . GoldSeekAdaptiveEA v3                |
-//|   big-bar veto, blocker panel, toggleable filters                  |
-//|                             . RegimeTrailPro                       |
-//|   efficiency-ratio gate, armed/re-arm, fade template               |
-//|                             . KeltnerFade                          |
+//| The Inputs tab is intentionally limited to the controls that       |
+//| belong to the user: lot size, SL, TP, profit lock and trailing     |
+//| stop. Everything else - signal engine, regime router, entry rails, |
+//| scratch engine - is a frozen system rule in the const block below  |
+//| and changes only with new backtest evidence.                       |
 //|                                                                    |
-//| Decisions use CLOSED M1 bars with CLOSED M5 context only.          |
-//| All *_USD inputs are absolute Gold price movements (e.g. 0.80      |
-//| means $0.80 on XAUUSD).                                            |
+//| All *_PriceUSD values are absolute Gold price movements            |
+//| (2.50 means $2.50 of XAUUSD price).                                |
 //|                                                                    |
-//| The EA attaches DISARMED (EnableTrading=false): it shows every     |
-//| signal and every blocker on the panel first. Arm it deliberately.  |
+//| Lineage (see /reference in the repo): execution layer from         |
+//| XVISION Gold Velocity V7; five-mode regime engine, CUSUM burst     |
+//| and failure-to-launch exit from GoldSeekAdaptiveEA v3; big-bar     |
+//| veto and blocker panel from RegimeTrailPro; ER gate and fade       |
+//| template from KeltnerFade. Decisions use CLOSED M1 bars with       |
+//| CLOSED M5 context only.                                            |
+//|                                                                    |
+//| Arming: the EA trades whenever MT4's AutoTrading is on and the     |
+//| chart's "Allow live trading" box is ticked. Attach with            |
+//| AutoTrading OFF to observe signals without trading.                |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.01"
+#property version   "2.00"
 #property description "M1/M5 gold scalper: CUSUM burst entries, regime-routed, scratch-first exits."
-// v1.01 audit fixes: daily-cap ticket double-count on partial closes,
-// partial-remainder state recovery, manual-position guard, fast-cut
-// spread-blip debounce, panel throttle, orphaned-globals sweep.
+#property description "User inputs: lot, SL, TP, profit lock, trailing stop. System rules are frozen."
+// v2.00: Inputs reduced to user trade management (GoldSeek-style);
+//        MaxHold time stop removed; partial banking removed; trailing
+//        is now a manual fixed distance; compiler warnings silenced.
+// v1.01: audit fixes (daily-cap double count, manual-position guard,
+//        fast-cut debounce, panel throttle, orphan sweep).
 
-enum GSLotMode
-{
-   GS_FIXED_LOTS   = 0,
-   GS_RISK_PERCENT = 1
-};
+// ------------------------ USER INPUTS -------------------------------
+input double LotSize                   = 0.01;
+input double StopLoss_PriceUSD         = 2.50;   // broker-side stop; 0 = none (software scratch still active)
+input double TakeProfit_PriceUSD       = 0.00;   // 0 = no fixed TP (lock/trail manage the win)
+input double LockTrigger_PriceUSD      = 0.60;   // at this favorable movement, lock profit; 0 = off
+input double LockedProfit_PriceUSD     = 0.10;   // SL moves to entry +/- this once triggered
+input double TrailingStart_PriceUSD    = 0.90;   // trailing activates from this favorable movement; 0 = off
+input double TrailingDistance_PriceUSD = 0.60;   // trailing gap behind price; 0 = off
 
-// ------------------------ 1. MASTER ---------------------------------
-input bool      EnableTrading            = false;    // arm automatic entries
-input bool      AllowLongs               = true;
-input bool      AllowShorts              = true;
-
-// ------------------------ 2. SIZING / CATASTROPHE STOP --------------
-input GSLotMode LotMode                  = GS_RISK_PERCENT;
-input double    FixedLots                = 0.01;
-input double    RiskPercent              = 0.5;      // % of balance risked at the hard stop
-input double    HardStopUSD              = 2.50;     // broker-side stop: disconnect insurance, not the working exit
-
-// ------------------------ 3. SCALP EXIT ENGINE ----------------------
-input double    ScratchAdverseUSD        = 0.80;     // software fast-cut, fires long before HardStopUSD
-input int       LaunchWindowSeconds      = 90;       // confirm-or-scratch window
-input double    LaunchProgressUSD        = 0.30;     // must reach this favorable movement inside the window
-input double    BreakEvenAtUSD           = 0.60;
-input double    BreakEvenLockUSD         = 0.10;
-input bool      UsePartialBank           = true;
-input double    PartialAtUSD             = 0.70;
-input double    PartialPercent           = 50.0;
-input double    TrailStartUSD            = 0.90;     // trail activates from this favorable excursion
-input int       TrailATRPeriod           = 14;       // M1 ATR chandelier
-input double    TrailATRMult             = 1.2;
-input double    TrailStepUSD             = 0.05;     // hysteresis: skip sub-step modifies
-input int       MaxHoldMinutes           = 12;       // a scalp that needs longer is not a scalp
-input bool      ExitOnOppositeSignal     = true;
-
-// ------------------------ 4. ENTRY RAILS ----------------------------
-input double    MaxSpreadUSD             = 0.35;
-input double    MaxChaseUSD              = 0.30;     // max distance from signal close at fire time
-input int       CooldownSeconds          = 120;
-input bool      BlockIfManualPosition    = true;     // stand aside while any non-EA position is open on this symbol
-input int       MaxTradesPerDay          = 15;       // 0 disables
-input double    MaxDailyLossPercent      = 1.5;      // of day-start balance; 0 disables
-input double    MaxDailyLossUSD          = 0.0;      // absolute cap; stricter of the two applies
-input int       MaxConsecutiveLosses     = 3;        // 0 disables
-input int       LossPauseMinutes         = 90;       // 0 = stand down for the rest of the day
-input bool      UseSessionFilter         = true;
-input string    SessionWindows           = "09:00-12:00,14:30-20:00"; // broker time, comma separated
-input string    NewsBlackouts            = "";       // broker times "HH:MM,HH:MM"; empty disables
-input int       BlackoutMinutesBefore    = 15;
-input int       BlackoutMinutesAfter     = 10;
-input bool      BlockLateFriday          = true;
-input int       FridayCutoffHour         = 20;       // broker hour
-
-// ------------------------ 5. MOMENTUM MODULE ------------------------
-input bool      UseMomentumModule        = true;
-input double    CusumAllowance           = 0.18;
-input double    CusumDecay               = 0.94;
-input double    CusumTriggerLevel        = 3.0;
-input int       CusumFreshBars           = 3;        // fire only within N bars of the level crossing
-input double    MinM1Strength            = 0.10;     // ATR-normalised M1 velocity composite
-input double    MinM1Coherence           = 0.75;     // fraction of M1 windows agreeing
-input double    BigBarMaxATR             = 2.0;      // never enter on an oversized trigger bar
-input double    MaxMaturityM5ATR         = 1.5;      // move age from the 30-bar M1 anchor, in M5 ATRs
-input bool      RequireM5Alignment       = true;     // M5 velocity + EMA20/30 ribbon must agree
-
-// ------------------------ 6. FADE MODULE (default OFF) --------------
-// Fading gold FAILED stability tests on H4 (measured, KeltnerFade
-// header). M1 quiet-session reversion is a different hypothesis: it
-// stays OFF until the tick backtest earns it a place.
-input bool      UseFadeModule            = false;
-input int       FadeMAPeriod             = 50;       // M1 SMA = the mean / target
-input int       FadeATRPeriod            = 24;
-input double    FadeBandATR              = 2.5;
-input double    FadeMaxER                = 0.15;     // fade only when ranging
-input double    FadeMaxExpansion         = 2.0;      // no fades in expanding volatility
-
-// ------------------------ 7. REGIME ROUTER --------------------------
-input int       ERPeriod                 = 20;       // efficiency ratio lookback, M1
-input double    MomentumMinER            = 0.30;
-input double    MinImpulseDrift          = 0.35;     // impulse+drift probability floor for momentum
-input double    MinFadeNoise             = 0.40;     // noise probability floor for fades
-input double    MaxShockExhaust          = 0.45;     // stand down above this shock+exhaustion probability
-
-// ------------------------ 8. EXECUTION ------------------------------
-input double    MaxSlippageUSD           = 0.30;
-input int       MagicNumber              = 26082601;
-input bool      ECNFallback              = true;     // send naked, anchor stops post-fill
-
-// ------------------------ 9. DISPLAY / LEDGER -----------------------
-input bool      ShowPanel                = true;
-input bool      WriteLedger              = true;     // CSV trade journal in MQL4/Files
-input bool      PushAlertsOnTrade        = false;
+// ------------------------ FROZEN SYSTEM RULES -----------------------
+// Scalp scratch engine
+const double SCRATCH_ADVERSE_USD   = 0.80;   // software fast-cut, fires before the broker stop
+const int    LAUNCH_WINDOW_SECONDS = 90;     // confirm-or-scratch window
+const double LAUNCH_PROGRESS_USD   = 0.30;   // must reach this inside the window
+const bool   EXIT_ON_OPPOSITE      = true;   // opposite qualified signal closes the trade
+const double TRAIL_STEP_USD        = 0.05;   // stop-modify hysteresis
+// Entry rails
+const double MAX_SPREAD_USD        = 0.35;
+const double MAX_CHASE_USD         = 0.30;   // max distance from signal close at fire time
+const int    COOLDOWN_SECONDS      = 120;
+const int    MAX_TRADES_PER_DAY    = 15;     // 0 disables
+const double MAX_DAILY_LOSS_PCT    = 1.5;    // of day-start balance; 0 disables
+const double MAX_DAILY_LOSS_USD    = 0.0;    // absolute cap; stricter of the two applies
+const int    MAX_CONSEC_LOSSES     = 3;      // 0 disables
+const int    LOSS_PAUSE_MINUTES    = 90;     // 0 = stand down for the rest of the day
+const bool   BLOCK_MANUAL_POSITION = true;   // stand aside while a non-EA position is open
+const bool   USE_SESSION_FILTER    = true;
+const string SESSION_WINDOWS       = "09:00-12:00,14:30-20:00";  // broker time
+const string NEWS_BLACKOUTS        = "";     // "HH:MM,HH:MM" broker time; empty disables
+const int    BLACKOUT_MIN_BEFORE   = 15;
+const int    BLACKOUT_MIN_AFTER    = 10;
+const bool   BLOCK_LATE_FRIDAY     = true;
+const int    FRIDAY_CUTOFF_HOUR    = 20;     // broker hour
+const bool   ALLOW_LONGS           = true;
+const bool   ALLOW_SHORTS          = true;
+// Momentum module
+const bool   USE_MOMENTUM          = true;
+const double CUSUM_ALLOWANCE       = 0.18;
+const double CUSUM_DECAY           = 0.94;
+const double CUSUM_TRIGGER         = 3.0;
+const int    CUSUM_FRESH_BARS      = 3;
+const double MIN_M1_STRENGTH       = 0.10;
+const double MIN_M1_COHERENCE      = 0.75;
+const double BIG_BAR_MAX_ATR       = 2.0;
+const double MAX_MATURITY_M5_ATR   = 1.5;
+const bool   REQUIRE_M5_ALIGNMENT  = true;
+// Fade module (OFF: fading gold failed H4 stability tests; it earns
+// its place in the tick backtest or stays off)
+const bool   USE_FADE              = false;
+const int    FADE_MA_PERIOD        = 50;
+const int    FADE_ATR_PERIOD       = 24;
+const double FADE_BAND_ATR         = 2.5;
+const double FADE_MAX_ER           = 0.15;
+const double FADE_MAX_EXPANSION    = 2.0;
+// Regime router
+const int    ER_PERIOD             = 20;
+const double MOMENTUM_MIN_ER       = 0.30;
+const double MIN_IMPULSE_DRIFT     = 0.35;
+const double MIN_FADE_NOISE        = 0.40;
+const double MAX_SHOCK_EXHAUST     = 0.45;
+// Execution / display
+const double MAX_SLIPPAGE_USD      = 0.30;
+const int    MAGIC_NUMBER          = 26082601;
+const bool   ECN_FALLBACK          = true;
+const bool   SHOW_PANEL            = true;
+const bool   WRITE_LEDGER          = true;
+const bool   PUSH_ALERTS           = false;
 
 // ------------------------ internal constants ------------------------
 #define GS_CLOSE_RETRY_ATTEMPTS      3
@@ -136,9 +119,9 @@ double   g_er=0.0, g_expansion=1.0;
 double   g_atrM1=0.0, g_atrM5=0.0;
 int      g_fadeArmed=1;
 datetime g_lastM1Bar=0;
-int      g_signalDir=0;                 // last evaluated signal on the closed bar
+int      g_signalDir=0;
 int      g_signalModule=0;              // 1=momentum 2=fade
-double   g_signalRef=0.0;               // signal bar close = no-chase anchor
+double   g_signalRef=0.0;
 double   g_signalFadeTarget=0.0;
 string   g_blocker="initialising";
 string   g_lastAction="attached";
@@ -146,9 +129,7 @@ string   g_lastAction="attached";
 // ------------------------ position state ----------------------------
 int      g_posTicket=-1;
 bool     g_posLaunched=false;
-bool     g_posPartialDone=false;
 double   g_posMaxFav=0.0;
-double   g_posInitialLots=0.0;
 bool     g_pendingClose=false;
 string   g_pendingCloseReason="";
 int      g_stopRepairTicket=-1;
@@ -211,8 +192,8 @@ double NormaliseLots(const double requested)
 
 int SlippagePoints()
 {
-   if(MaxSlippageUSD<=0.0 || Point<=0.0) return(0);
-   return((int)MathRound(MaxSlippageUSD/Point));
+   if(MAX_SLIPPAGE_USD<=0.0 || Point<=0.0) return(0);
+   return((int)MathRound(MAX_SLIPPAGE_USD/Point));
 }
 
 double BrokerModifyDistance()
@@ -241,7 +222,7 @@ bool ParseSchedules()
    g_sessCount=0;
    g_newsCount=0;
    string parts[];
-   int n=StringSplit(SessionWindows,',',parts);
+   int n=StringSplit(SESSION_WINDOWS,',',parts);
    for(int i=0;i<n && g_sessCount<GS_MAX_WINDOWS;i++)
    {
       string w=parts[i];
@@ -256,12 +237,12 @@ bool ParseSchedules()
       g_sessEnd[g_sessCount]=b;
       g_sessCount++;
    }
-   if(UseSessionFilter && g_sessCount==0) return(false);
+   if(USE_SESSION_FILTER && g_sessCount==0) return(false);
 
-   if(StringLen(NewsBlackouts)>0)
+   if(StringLen(NEWS_BLACKOUTS)>0)
    {
       string times[];
-      int k=StringSplit(NewsBlackouts,',',times);
+      int k=StringSplit(NEWS_BLACKOUTS,',',times);
       for(int j=0;j<k && g_newsCount<GS_MAX_WINDOWS;j++)
       {
          string t=times[j];
@@ -278,7 +259,7 @@ bool ParseSchedules()
 
 bool SessionOK(const datetime t)
 {
-   if(!UseSessionFilter) return(true);
+   if(!USE_SESSION_FILTER) return(true);
    int m=TimeHour(t)*60+TimeMinute(t);
    for(int i=0;i<g_sessCount;i++)
    {
@@ -296,15 +277,15 @@ bool BlackoutActive(const datetime t)
    for(int i=0;i<g_newsCount;i++)
    {
       int diff=m-g_newsMinute[i];
-      if(diff>=-BlackoutMinutesBefore && diff<=BlackoutMinutesAfter) return(true);
+      if(diff>=-BLACKOUT_MIN_BEFORE && diff<=BLACKOUT_MIN_AFTER) return(true);
    }
    return(false);
 }
 
 bool LateFridayBlocked(const datetime t)
 {
-   if(!BlockLateFriday) return(false);
-   return(TimeDayOfWeek(t)==5 && TimeHour(t)>=FridayCutoffHour);
+   if(!BLOCK_LATE_FRIDAY) return(false);
+   return(TimeDayOfWeek(t)==5 && TimeHour(t)>=FRIDAY_CUTOFF_HOUR);
 }
 
 //+------------------------------------------------------------------+
@@ -355,9 +336,9 @@ double M1Coherence(const int shift,const int dir)
 // Signed efficiency ratio: |ER| near 1 = clean directional path.
 double EfficiencyRatio(const int shift)
 {
-   double net=iClose(Symbol(),PERIOD_M1,shift)-iClose(Symbol(),PERIOD_M1,shift+ERPeriod);
+   double net=iClose(Symbol(),PERIOD_M1,shift)-iClose(Symbol(),PERIOD_M1,shift+ER_PERIOD);
    double path=0.0;
-   for(int k=0;k<ERPeriod;k++)
+   for(int k=0;k<ER_PERIOD;k++)
       path+=MathAbs(iClose(Symbol(),PERIOD_M1,shift+k)-iClose(Symbol(),PERIOD_M1,shift+k+1));
    if(path<=0.0) return(0.0);
    return(net/path);
@@ -386,10 +367,10 @@ void UpdateCusum(const datetime barTime)
    if(c<=0.0 || p<=0.0) return;
    double z=(c-p)/ReturnSigmaM1(1);
    double prevUp=g_cusumUp, prevDown=g_cusumDown;
-   g_cusumUp=Clamp(MathMax(0.0,CusumDecay*g_cusumUp+z-CusumAllowance),0.0,12.0);
-   g_cusumDown=Clamp(MathMax(0.0,CusumDecay*g_cusumDown-z-CusumAllowance),0.0,12.0);
-   if(prevUp<CusumTriggerLevel && g_cusumUp>=CusumTriggerLevel)   g_cusumUpCross=barTime;
-   if(prevDown<CusumTriggerLevel && g_cusumDown>=CusumTriggerLevel) g_cusumDownCross=barTime;
+   g_cusumUp=Clamp(MathMax(0.0,CUSUM_DECAY*g_cusumUp+z-CUSUM_ALLOWANCE),0.0,12.0);
+   g_cusumDown=Clamp(MathMax(0.0,CUSUM_DECAY*g_cusumDown-z-CUSUM_ALLOWANCE),0.0,12.0);
+   if(prevUp<CUSUM_TRIGGER && g_cusumUp>=CUSUM_TRIGGER)     g_cusumUpCross=barTime;
+   if(prevDown<CUSUM_TRIGGER && g_cusumDown>=CUSUM_TRIGGER) g_cusumDownCross=barTime;
 }
 
 // Five-mode regime posterior (noise/drift/impulse/exhaustion/shock)
@@ -405,6 +386,7 @@ void UpdateModes()
    double lastZ=lastRet/ReturnSigmaM1(1);
 
    double ll[5];
+   ArrayInitialize(ll,0.0);
    ll[0]=1.35*(1.0-eff)-0.45*speed-0.25*MathAbs(g_expansion-1.0);
    ll[1]=1.20*eff+0.45*speed+0.35*MathMax(agree,0.0)-0.35*accel;
    ll[2]=0.90*eff+0.75*speed+0.70*MathMax(accel,0.0)+0.35*MathMax(g_expansion-1.0,0.0);
@@ -414,6 +396,7 @@ void UpdateModes()
    double mx=ll[0];
    for(int i=1;i<5;i++) mx=MathMax(mx,ll[i]);
    double like[5];
+   ArrayInitialize(like,0.0);
    double total=0.0;
    for(int j=0;j<5;j++)
    {
@@ -423,9 +406,11 @@ void UpdateModes()
    if(total<=0.0) total=1.0;
 
    double prev[5];
+   ArrayInitialize(prev,0.0);
    prev[0]=g_modeNoise; prev[1]=g_modeDrift; prev[2]=g_modeImpulse;
    prev[3]=g_modeExhaustion; prev[4]=g_modeShock;
    double upd[5];
+   ArrayInitialize(upd,0.0);
    double updTotal=0.0;
    for(int m=0;m<5;m++)
    {
@@ -460,34 +445,34 @@ void UpdateRegime(const datetime barTime)
 //+------------------------------------------------------------------+
 int EvaluateMomentum(string &blocker)
 {
-   if(!UseMomentumModule) { blocker="momentum module off"; return(0); }
-   if(g_modeShock+g_modeExhaustion>MaxShockExhaust)
+   if(!USE_MOMENTUM) { blocker="momentum module off"; return(0); }
+   if(g_modeShock+g_modeExhaustion>MAX_SHOCK_EXHAUST)
       { blocker=StringFormat("shock/exhaust %.2f",g_modeShock+g_modeExhaustion); return(0); }
-   if(g_modeImpulse+g_modeDrift<MinImpulseDrift)
+   if(g_modeImpulse+g_modeDrift<MIN_IMPULSE_DRIFT)
       { blocker=StringFormat("impulse+drift %.2f",g_modeImpulse+g_modeDrift); return(0); }
 
    int dir=0;
    datetime cross=0;
-   if(g_cusumUp>=CusumTriggerLevel && g_cusumUp-g_cusumDown>=CusumTriggerLevel*0.5)
+   if(g_cusumUp>=CUSUM_TRIGGER && g_cusumUp-g_cusumDown>=CUSUM_TRIGGER*0.5)
       { dir=1; cross=g_cusumUpCross; }
-   else if(g_cusumDown>=CusumTriggerLevel && g_cusumDown-g_cusumUp>=CusumTriggerLevel*0.5)
+   else if(g_cusumDown>=CUSUM_TRIGGER && g_cusumDown-g_cusumUp>=CUSUM_TRIGGER*0.5)
       { dir=-1; cross=g_cusumDownCross; }
    if(dir==0) { blocker="no CUSUM burst"; return(0); }
-   if(cross==0 || (iTime(Symbol(),PERIOD_M1,1)-cross)>CusumFreshBars*60)
+   if(cross==0 || (iTime(Symbol(),PERIOD_M1,1)-cross)>CUSUM_FRESH_BARS*60)
       { blocker="burst stale"; return(0); }
 
-   if(dir*g_er<=0.0 || MathAbs(g_er)<MomentumMinER)
+   if(dir*g_er<=0.0 || MathAbs(g_er)<MOMENTUM_MIN_ER)
       { blocker=StringFormat("ER %.2f",g_er); return(0); }
-   if(dir*g_m1Comp<MinM1Strength)
+   if(dir*g_m1Comp<MIN_M1_STRENGTH)
       { blocker=StringFormat("M1 strength %.2f",dir*g_m1Comp); return(0); }
-   if(M1Coherence(1,dir)<MinM1Coherence)
+   if(M1Coherence(1,dir)<MIN_M1_COHERENCE)
       { blocker="M1 coherence"; return(0); }
 
    double body=iClose(Symbol(),PERIOD_M1,1)-iOpen(Symbol(),PERIOD_M1,1);
    if(dir*body<=0.0) { blocker="trigger bar body against"; return(0); }
 
    double tr=iHigh(Symbol(),PERIOD_M1,1)-iLow(Symbol(),PERIOD_M1,1);
-   if(g_atrM1>0.0 && tr>BigBarMaxATR*g_atrM1)
+   if(g_atrM1>0.0 && tr>BIG_BAR_MAX_ATR*g_atrM1)
       { blocker="oversized trigger bar"; return(0); }
 
    // move maturity: never chase a burst that already ran
@@ -499,10 +484,10 @@ int EvaluateMomentum(string &blocker)
    }
    double close1=iClose(Symbol(),PERIOD_M1,1);
    double maturity=(dir>0 ? close1-lo : hi-close1);
-   if(g_atrM5>0.0 && maturity/g_atrM5>MaxMaturityM5ATR)
+   if(g_atrM5>0.0 && maturity/g_atrM5>MAX_MATURITY_M5_ATR)
       { blocker="move mature - no chase"; return(0); }
 
-   if(RequireM5Alignment)
+   if(REQUIRE_M5_ALIGNMENT)
    {
       if(dir*g_m5Comp<=0.0) { blocker="M5 velocity against"; return(0); }
       double e20=iMA(Symbol(),PERIOD_M5,20,0,MODE_EMA,PRICE_CLOSE,1);
@@ -518,18 +503,18 @@ int EvaluateMomentum(string &blocker)
 int EvaluateFade(string &blocker,double &target)
 {
    target=0.0;
-   if(!UseFadeModule) { blocker="fade module off"; return(0); }
-   if(g_modeShock+g_modeExhaustion>MaxShockExhaust) { blocker="shock/exhaust"; return(0); }
-   if(g_modeNoise<MinFadeNoise)
+   if(!USE_FADE) { blocker="fade module off"; return(0); }
+   if(g_modeShock+g_modeExhaustion>MAX_SHOCK_EXHAUST) { blocker="shock/exhaust"; return(0); }
+   if(g_modeNoise<MIN_FADE_NOISE)
       { blocker=StringFormat("noise %.2f",g_modeNoise); return(0); }
-   if(MathAbs(g_er)>FadeMaxER) { blocker="trending - no fade"; return(0); }
-   if(g_expansion>FadeMaxExpansion) { blocker="vol expanding - no fade"; return(0); }
+   if(MathAbs(g_er)>FADE_MAX_ER) { blocker="trending - no fade"; return(0); }
+   if(g_expansion>FADE_MAX_EXPANSION) { blocker="vol expanding - no fade"; return(0); }
 
-   double mid=iMA(Symbol(),PERIOD_M1,FadeMAPeriod,0,MODE_SMA,PRICE_CLOSE,1);
-   double atr=iATR(Symbol(),PERIOD_M1,FadeATRPeriod,1);
+   double mid=iMA(Symbol(),PERIOD_M1,FADE_MA_PERIOD,0,MODE_SMA,PRICE_CLOSE,1);
+   double atr=iATR(Symbol(),PERIOD_M1,FADE_ATR_PERIOD,1);
    if(mid<=0.0 || atr<=0.0) { blocker="fade data"; return(0); }
-   double up=mid+FadeBandATR*atr;
-   double dn=mid-FadeBandATR*atr;
+   double up=mid+FADE_BAND_ATR*atr;
+   double dn=mid-FADE_BAND_ATR*atr;
    double close1=iClose(Symbol(),PERIOD_M1,1);
 
    // re-arm only after price returns inside the bands: one fade per excursion
@@ -572,15 +557,18 @@ void RefreshDayCache()
 
    datetime closeTimes[200];
    double   profits[200];
-   int      n=0;
    datetime opens[400];
+   int      z=0;
+   for(z=0;z<200;z++) { closeTimes[z]=0; profits[z]=0.0; }
+   for(z=0;z<400;z++) opens[z]=0;
+   int      n=0;
    int      oc=0;
    double pnl=0.0;
 
    for(int h=OrdersHistoryTotal()-1;h>=0;h--)
    {
       if(!OrderSelect(h,SELECT_BY_POS,MODE_HISTORY)) continue;
-      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber) continue;
+      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MAGIC_NUMBER) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
       if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
       if(OrderCloseTime()>=start && n<200)
@@ -595,14 +583,14 @@ void RefreshDayCache()
    for(int t=OrdersTotal()-1;t>=0;t--)
    {
       if(!OrderSelect(t,SELECT_BY_POS,MODE_TRADES)) continue;
-      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber) continue;
+      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MAGIC_NUMBER) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
       if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
    }
 
-   // A partial close splits one entry into several tickets that share
-   // an open time. Count unique open times, not tickets, or the daily
-   // trade cap fills at roughly half the intended entry count.
+   // Tickets split by partial/manual partial closes share an open time:
+   // count unique open times, not tickets, so the daily cap counts
+   // true entries.
    int trades=0;
    if(oc>0)
    {
@@ -651,13 +639,13 @@ void RefreshDayCache()
 double DailyLossLimit()
 {
    double limit=0.0;
-   if(MaxDailyLossPercent>0.0)
+   if(MAX_DAILY_LOSS_PCT>0.0)
    {
       double dayStartBalance=AccountBalance()-g_closedPnLToday;
-      limit=dayStartBalance*MaxDailyLossPercent/100.0;
+      limit=dayStartBalance*MAX_DAILY_LOSS_PCT/100.0;
    }
-   if(MaxDailyLossUSD>0.0)
-      limit=(limit>0.0 ? MathMin(limit,MaxDailyLossUSD) : MaxDailyLossUSD);
+   if(MAX_DAILY_LOSS_USD>0.0)
+      limit=(limit>0.0 ? MathMin(limit,MAX_DAILY_LOSS_USD) : MAX_DAILY_LOSS_USD);
    return(limit);
 }
 
@@ -667,7 +655,7 @@ double DailyLossLimit()
 void LedgerWrite(const string eventName,const int dir,const double lots,
                  const double price,const double profit,const string reason)
 {
-   if(!WriteLedger) return;
+   if(!WRITE_LEDGER) return;
    string file=StringFormat("GoldScalper_%s_%d.csv",Symbol(),AccountNumber());
    int h=FileOpen(file,FILE_CSV|FILE_READ|FILE_WRITE,';');
    if(h==INVALID_HANDLE) return;
@@ -694,7 +682,7 @@ int FindManagedTicket()
    for(int i=OrdersTotal()-1;i>=0;i--)
    {
       if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
-      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber) continue;
+      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MAGIC_NUMBER) continue;
       if(OrderType()==OP_BUY || OrderType()==OP_SELL) return(OrderTicket());
    }
    return(-1);
@@ -710,7 +698,7 @@ double ProfitMovementSelected()
 
 string TicketKey(const int ticket,const string suffix)
 {
-   return(StringFormat("GS1.%d.%d.%d.%s",AccountNumber(),MagicNumber,ticket,suffix));
+   return(StringFormat("GS1.%d.%d.%d.%s",AccountNumber(),MAGIC_NUMBER,ticket,suffix));
 }
 
 void PersistTicketState(const int ticket)
@@ -718,8 +706,6 @@ void PersistTicketState(const int ticket)
    if(IsTesting()) return;
    GlobalVariableSet(TicketKey(ticket,"MF"),g_posMaxFav);
    GlobalVariableSet(TicketKey(ticket,"LN"),g_posLaunched?1.0:0.0);
-   GlobalVariableSet(TicketKey(ticket,"PD"),g_posPartialDone?1.0:0.0);
-   GlobalVariableSet(TicketKey(ticket,"IL"),g_posInitialLots);
 }
 
 void DropTicketState(const int ticket)
@@ -727,8 +713,6 @@ void DropTicketState(const int ticket)
    if(IsTesting() || ticket<0) return;
    GlobalVariableDel(TicketKey(ticket,"MF"));
    GlobalVariableDel(TicketKey(ticket,"LN"));
-   GlobalVariableDel(TicketKey(ticket,"PD"));
-   GlobalVariableDel(TicketKey(ticket,"IL"));
 }
 
 // Adopt a position found in the terminal (fresh entry or restart).
@@ -737,25 +721,13 @@ void AdoptTicket(const int ticket)
    g_posTicket=ticket;
    g_adverseHits=0;
    g_posMaxFav=MathMax(0.0,ProfitMovementSelected());
-   g_posLaunched=(g_posMaxFav>=LaunchProgressUSD);
-   g_posPartialDone=false;
-   g_posInitialLots=OrderLots();
-   // partial-close remainders carry a broker comment ("from #...",
-   // "partial..."): never bank a second partial out of a remainder,
-   // even if the per-ticket state was lost to a crash or ticket swap
-   string cmt=OrderComment();
-   if(StringFind(cmt,"from #")>=0 || StringFind(cmt,"partial")>=0)
-      g_posPartialDone=true;
+   g_posLaunched=(g_posMaxFav>=LAUNCH_PROGRESS_USD);
    if(!IsTesting())
    {
       if(GlobalVariableCheck(TicketKey(ticket,"MF")))
          g_posMaxFav=MathMax(g_posMaxFav,GlobalVariableGet(TicketKey(ticket,"MF")));
       if(GlobalVariableCheck(TicketKey(ticket,"LN")))
          g_posLaunched=(g_posLaunched || GlobalVariableGet(TicketKey(ticket,"LN"))>0.5);
-      if(GlobalVariableCheck(TicketKey(ticket,"PD")))
-         g_posPartialDone=(GlobalVariableGet(TicketKey(ticket,"PD"))>0.5);
-      if(GlobalVariableCheck(TicketKey(ticket,"IL")))
-         g_posInitialLots=GlobalVariableGet(TicketKey(ticket,"IL"));
       PersistTicketState(ticket);
    }
 }
@@ -766,9 +738,7 @@ void ForgetPosition()
    g_posTicket=-1;
    g_adverseHits=0;
    g_posLaunched=false;
-   g_posPartialDone=false;
    g_posMaxFav=0.0;
-   g_posInitialLots=0.0;
    g_pendingClose=false;
    g_pendingCloseReason="";
    g_stopRepairTicket=-1;
@@ -802,7 +772,7 @@ bool CloseSelectedOrder(const string reason)
          if(OrderSelect(ticket,SELECT_BY_TICKET,MODE_HISTORY))
             profit=OrderProfit()+OrderSwap()+OrderCommission();
          LedgerWrite("EXIT",(type==OP_BUY?1:-1),lots,price,profit,reason);
-         if(PushAlertsOnTrade)
+         if(PUSH_ALERTS)
             SendNotification(StringFormat("GoldScalper closed %.2f lot: %s (%.2f)",lots,reason,profit));
          g_lastAction="CLOSED: "+reason;
          ForgetPosition();
@@ -822,19 +792,6 @@ bool CloseSelectedOrder(const string reason)
    return(false);
 }
 
-double CalculateLots()
-{
-   if(LotMode==GS_FIXED_LOTS) return(NormaliseLots(FixedLots));
-   double tickValue=MarketInfo(Symbol(),MODE_TICKVALUE);
-   double tickSize=MarketInfo(Symbol(),MODE_TICKSIZE);
-   if(tickSize<=0.0) tickSize=Point;
-   if(tickValue<=0.0 || HardStopUSD<=0.0) return(0.0);
-   double riskMoney=AccountBalance()*RiskPercent/100.0;
-   double riskPerLot=(HardStopUSD/tickSize)*tickValue;
-   if(riskPerLot<=0.0) return(0.0);
-   return(NormaliseLots(riskMoney/riskPerLot));
-}
-
 bool SendEntry(const int dir,const int module,const double reference,const double fadeTarget)
 {
    RefreshRates();
@@ -842,21 +799,23 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
    if(ask<=0.0 || bid<=0.0 || ask<bid)
       { g_lastAction="ENTRY BLOCKED: NO QUOTE"; return(false); }
    double spread=ask-bid;
-   if(MaxSpreadUSD>0.0 && spread>MaxSpreadUSD)
+   if(MAX_SPREAD_USD>0.0 && spread>MAX_SPREAD_USD)
       { g_lastAction="ENTRY BLOCKED: SPREAD"; return(false); }
    double entry=(dir>0 ? ask : bid);
-   if(MaxChaseUSD>0.0 && MathAbs(entry-reference)>MaxChaseUSD)
+   if(MAX_CHASE_USD>0.0 && MathAbs(entry-reference)>MAX_CHASE_USD)
       { g_lastAction="ENTRY BLOCKED: PRICE MOVED - NO CHASE"; return(false); }
 
-   double lots=CalculateLots();
-   if(lots<=0.0) { g_lastAction="ENTRY BLOCKED: LOT CALC"; return(false); }
+   double lots=NormaliseLots(LotSize);
+   if(lots<=0.0) { g_lastAction="ENTRY BLOCKED: LOT INVALID"; return(false); }
    int type=(dir>0 ? OP_BUY : OP_SELL);
    if(AccountFreeMarginCheck(Symbol(),type,lots)<=0.0)
       { g_lastAction="ENTRY BLOCKED: MARGIN"; return(false); }
 
-   double sl=(HardStopUSD>0.0 ? (dir>0 ? entry-HardStopUSD : entry+HardStopUSD) : 0.0);
+   double sl=(StopLoss_PriceUSD>0.0 ? (dir>0 ? entry-StopLoss_PriceUSD : entry+StopLoss_PriceUSD) : 0.0);
    double tp=0.0;
-   if(module==2 && fadeTarget>0.0)
+   if(TakeProfit_PriceUSD>0.0)
+      tp=(dir>0 ? entry+TakeProfit_PriceUSD : entry-TakeProfit_PriceUSD);
+   else if(module==2 && fadeTarget>0.0)
    {
       double minDist=BrokerModifyDistance();
       if(MathAbs(fadeTarget-entry)>minDist && dir*(fadeTarget-entry)>0.0) tp=fadeTarget;
@@ -866,18 +825,18 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
 
    string comment=StringFormat(module==2 ? "GSF_%d" : "GSM_%d",(int)TimeCurrent());
    ResetLastError();
-   int ticket=OrderSend(Symbol(),type,lots,entry,SlippagePoints(),sl,tp,comment,MagicNumber,0,
+   int ticket=OrderSend(Symbol(),type,lots,entry,SlippagePoints(),sl,tp,comment,MAGIC_NUMBER,0,
                         (dir>0 ? clrLime : clrTomato));
    int firstError=GetLastError();
    bool usedFallback=false;
-   if(ticket<0 && ECNFallback && firstError==ERR_INVALID_STOPS)
+   if(ticket<0 && ECN_FALLBACK && firstError==ERR_INVALID_STOPS)
    {
       RefreshRates();
       entry=(dir>0 ? Ask : Bid);
-      if(MaxSpreadUSD>0.0 && Ask-Bid>MaxSpreadUSD)
+      if(MAX_SPREAD_USD>0.0 && Ask-Bid>MAX_SPREAD_USD)
          { g_lastAction="ENTRY ABORTED: SPREAD"; return(false); }
       ResetLastError();
-      ticket=OrderSend(Symbol(),type,lots,entry,SlippagePoints(),0.0,0.0,comment,MagicNumber,0,
+      ticket=OrderSend(Symbol(),type,lots,entry,SlippagePoints(),0.0,0.0,comment,MAGIC_NUMBER,0,
                        (dir>0 ? clrLime : clrTomato));
       usedFallback=(ticket>=0);
       firstError=GetLastError();
@@ -895,12 +854,16 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
    if(OrderSelect(ticket,SELECT_BY_TICKET))
    {
       double open=OrderOpenPrice();
-      double exactSL=(HardStopUSD>0.0 ? (dir>0 ? open-HardStopUSD : open+HardStopUSD) : 0.0);
+      double exactSL=(StopLoss_PriceUSD>0.0 ?
+         (dir>0 ? open-StopLoss_PriceUSD : open+StopLoss_PriceUSD) : 0.0);
+      double exactTP=(TakeProfit_PriceUSD>0.0 ?
+         (dir>0 ? open+TakeProfit_PriceUSD : open-TakeProfit_PriceUSD) : OrderTakeProfit());
       exactSL=(exactSL>0.0 ? NormalizeDouble(exactSL,Digits) : 0.0);
-      if(usedFallback || MathAbs(OrderStopLoss()-exactSL)>Point)
+      exactTP=(exactTP>0.0 ? NormalizeDouble(exactTP,Digits) : 0.0);
+      if(usedFallback || MathAbs(OrderStopLoss()-exactSL)>Point || MathAbs(OrderTakeProfit()-exactTP)>Point)
       {
          ResetLastError();
-         if(!OrderModify(ticket,open,exactSL,OrderTakeProfit(),0,clrNONE) && HardStopUSD>0.0)
+         if(!OrderModify(ticket,open,exactSL,exactTP,0,clrNONE) && StopLoss_PriceUSD>0.0)
          {
             // refuse to run unprotected: close rather than hold a naked position
             Print("GoldScalper: stop anchoring failed, error ",GetLastError());
@@ -924,7 +887,7 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
    g_lastAction=StringFormat("OPENED %s %.2f LOT (%s)",dir>0?"BUY":"SELL",lots,
                              module==2?"FADE":"MOMENTUM");
    LedgerWrite("ENTRY",dir,lots,entry,0.0,module==2?"fade":"momentum");
-   if(PushAlertsOnTrade)
+   if(PUSH_ALERTS)
       SendNotification(StringFormat("GoldScalper opened %s %.2f lot (%s)",
                        dir>0?"BUY":"SELL",lots,module==2?"fade":"momentum"));
    return(true);
@@ -935,7 +898,7 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
 //+------------------------------------------------------------------+
 bool EnsureStopProtection()
 {
-   if(HardStopUSD<=0.0) return(true);
+   if(StopLoss_PriceUSD<=0.0) return(true);
    int ticket=OrderTicket();
    if(OrderStopLoss()>0.0)
    {
@@ -950,7 +913,7 @@ bool EnsureStopProtection()
    }
    RefreshRates();
    bool isBuy=(OrderType()==OP_BUY);
-   double repair=(isBuy ? OrderOpenPrice()-HardStopUSD : OrderOpenPrice()+HardStopUSD);
+   double repair=(isBuy ? OrderOpenPrice()-StopLoss_PriceUSD : OrderOpenPrice()+StopLoss_PriceUSD);
    double minDist=BrokerModifyDistance();
    if(isBuy) repair=MathMin(repair,Bid-minDist);
    else      repair=MathMax(repair,Ask+minDist);
@@ -970,74 +933,29 @@ bool EnsureStopProtection()
    return(false);
 }
 
-void ProcessPartialBank()
-{
-   if(!UsePartialBank || g_posPartialDone) return;
-   if(g_posMaxFav<PartialAtUSD || ProfitMovementSelected()<PartialAtUSD*0.5) return;
-   int ticket=OrderTicket();
-   int type=OrderType();
-   double minimum=MarketInfo(Symbol(),MODE_MINLOT);
-   double step=MarketInfo(Symbol(),MODE_LOTSTEP);
-   if(step<=0.0) step=0.01;
-   double closeLots=MathFloor((g_posInitialLots*PartialPercent/100.0+1e-10)/step)*step;
-   closeLots=NormalizeDouble(closeLots,LotDigits(step));
-   double current=OrderLots();
-   if(closeLots<minimum || current-closeLots<minimum-1e-10)
-   {
-      g_posPartialDone=true;   // lot too small to split: bank via trail instead
-      PersistTicketState(ticket);
-      return;
-   }
-   RefreshRates();
-   double price=(type==OP_BUY ? Bid : Ask);
-   ResetLastError();
-   if(OrderClose(ticket,closeLots,price,SlippagePoints(),clrGold))
-   {
-      g_posPartialDone=true;
-      InvalidateDayCache();
-      // the residual runner keeps the original ticket state under a new
-      // ticket in MT4; re-discover on the next management pass
-      int newTicket=FindManagedTicket();
-      if(newTicket>=0 && newTicket!=g_posTicket)
-      {
-         DropTicketState(g_posTicket);
-         g_posTicket=newTicket;
-      }
-      PersistTicketState(g_posTicket);
-      double tickValue=MarketInfo(Symbol(),MODE_TICKVALUE);
-      double tickSize=MarketInfo(Symbol(),MODE_TICKSIZE);
-      double moved=(type==OP_BUY ? price-OrderOpenPrice() : OrderOpenPrice()-price);
-      double est=(tickSize>0.0 ? moved/tickSize*tickValue*closeLots : 0.0);
-      g_lastAction=StringFormat("PARTIAL BANKED %.2f LOT",closeLots);
-      LedgerWrite("PARTIAL",(type==OP_BUY?1:-1),closeLots,price,est,"partial bank");
-   }
-   else
-      Print("GoldScalper: partial close failed, error ",GetLastError());
-}
-
 void ApplyStopManagement()
 {
    RefreshRates();
    bool isBuy=(OrderType()==OP_BUY);
-   double movement=ProfitMovementSelected();
    double desired=OrderStopLoss();
    bool haveDesired=(desired>0.0);
 
-   if(BreakEvenAtUSD>0.0 && g_posMaxFav>=BreakEvenAtUSD)
+   // profit lock: once movement reached the trigger, the stop holds at
+   // least entry +/- LockedProfit for the rest of the trade
+   if(LockTrigger_PriceUSD>0.0 && g_posMaxFav>=LockTrigger_PriceUSD)
    {
-      double be=(isBuy ? OrderOpenPrice()+BreakEvenLockUSD : OrderOpenPrice()-BreakEvenLockUSD);
-      if(!haveDesired || (isBuy && be>desired) || (!isBuy && be<desired))
-         { desired=be; haveDesired=true; }
+      double lock=(isBuy ? OrderOpenPrice()+LockedProfit_PriceUSD
+                         : OrderOpenPrice()-LockedProfit_PriceUSD);
+      if(!haveDesired || (isBuy && lock>desired) || (!isBuy && lock<desired))
+         { desired=lock; haveDesired=true; }
    }
-   if(TrailStartUSD>0.0 && g_posMaxFav>=TrailStartUSD)
+   // manual trailing stop: fixed distance behind price once started
+   if(TrailingStart_PriceUSD>0.0 && TrailingDistance_PriceUSD>0.0 &&
+      g_posMaxFav>=TrailingStart_PriceUSD)
    {
-      double atr=iATR(Symbol(),PERIOD_M1,TrailATRPeriod,1);
-      if(atr>0.0)
-      {
-         double trail=(isBuy ? Bid-atr*TrailATRMult : Ask+atr*TrailATRMult);
-         if(!haveDesired || (isBuy && trail>desired) || (!isBuy && trail<desired))
-            { desired=trail; haveDesired=true; }
-      }
+      double trail=(isBuy ? Bid-TrailingDistance_PriceUSD : Ask+TrailingDistance_PriceUSD);
+      if(!haveDesired || (isBuy && trail>desired) || (!isBuy && trail<desired))
+         { desired=trail; haveDesired=true; }
    }
    if(!haveDesired) return;
 
@@ -1049,14 +967,14 @@ void ApplyStopManagement()
    double oldStop=OrderStopLoss();
    bool improves=(oldStop<=0.0 || (isBuy && desired>oldStop) || (!isBuy && desired<oldStop));
    if(!improves) return;
-   if(oldStop>0.0 && MathAbs(desired-oldStop)<MathMax(TrailStepUSD,Point)) return;
+   if(oldStop>0.0 && MathAbs(desired-oldStop)<MathMax(TRAIL_STEP_USD,Point)) return;
 
    ResetLastError();
    if(!OrderModify(OrderTicket(),OrderOpenPrice(),desired,OrderTakeProfit(),0,clrDodgerBlue))
    {
       int error=GetLastError();
       if(error!=ERR_NO_RESULT)
-         Print("GoldScalper: trail modify failed, error ",error);
+         Print("GoldScalper: stop modify failed, error ",error);
    }
 }
 
@@ -1077,7 +995,7 @@ void ManagePosition()
    double movement=ProfitMovementSelected();
    if(movement>g_posMaxFav)
    {
-      bool crossedLaunch=(!g_posLaunched && movement>=LaunchProgressUSD);
+      bool crossedLaunch=(!g_posLaunched && movement>=LAUNCH_PROGRESS_USD);
       if(crossedLaunch) g_posLaunched=true;
       if(crossedLaunch || movement-g_posMaxFav>0.05)
       {
@@ -1088,10 +1006,10 @@ void ManagePosition()
          g_posMaxFav=movement;
    }
 
-   // 1. fast cut: the working loss limit, far inside the broker stop.
+   // 1. fast cut: the working loss limit, inside the broker stop.
    //    Movement is measured close-side, so a one-tick spread spike can
    //    breach it; require two consecutive breaches before cutting.
-   if(ScratchAdverseUSD>0.0 && movement<=-ScratchAdverseUSD)
+   if(SCRATCH_ADVERSE_USD>0.0 && movement<=-SCRATCH_ADVERSE_USD)
    {
       g_adverseHits++;
       if(g_adverseHits>=2) { CloseSelectedOrder("FAST CUT"); return; }
@@ -1100,17 +1018,10 @@ void ManagePosition()
       g_adverseHits=0;
 
    // 2. confirm-or-scratch: no launch inside the window = dead trade
-   if(LaunchWindowSeconds>0 && !g_posLaunched &&
-      TimeCurrent()-OrderOpenTime()>=LaunchWindowSeconds)
+   if(LAUNCH_WINDOW_SECONDS>0 && !g_posLaunched &&
+      TimeCurrent()-OrderOpenTime()>=LAUNCH_WINDOW_SECONDS)
       { CloseSelectedOrder("FAILURE TO LAUNCH"); return; }
 
-   // 3. time stop
-   if(MaxHoldMinutes>0 && TimeCurrent()-OrderOpenTime()>=MaxHoldMinutes*60)
-      { CloseSelectedOrder("MAX HOLD"); return; }
-
-   ProcessPartialBank();
-   if(FindManagedTicket()<0) return;
-   if(!OrderSelect(g_posTicket,SELECT_BY_TICKET)) return;
    ApplyStopManagement();
 }
 
@@ -1119,17 +1030,16 @@ void ManagePosition()
 //+------------------------------------------------------------------+
 bool EntryAllowed(const int dir,string &blocker)
 {
-   if(!EnableTrading) { blocker="disarmed (EnableTrading=false)"; return(false); }
-   if(dir>0 && !AllowLongs)  { blocker="longs disabled"; return(false); }
-   if(dir<0 && !AllowShorts) { blocker="shorts disabled"; return(false); }
-   if(!IsTesting() && !IsTradeAllowed()) { blocker="autotrading off"; return(false); }
+   if(dir>0 && !ALLOW_LONGS)  { blocker="longs disabled"; return(false); }
+   if(dir<0 && !ALLOW_SHORTS) { blocker="shorts disabled"; return(false); }
+   if(!IsTesting() && !IsTradeAllowed()) { blocker="AutoTrading off"; return(false); }
    if(FindManagedTicket()>=0) { blocker="position open"; return(false); }
-   if(BlockIfManualPosition)
+   if(BLOCK_MANUAL_POSITION)
    {
       for(int i=OrdersTotal()-1;i>=0;i--)
       {
          if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
-         if(OrderSymbol()!=Symbol() || OrderMagicNumber()==MagicNumber) continue;
+         if(OrderSymbol()!=Symbol() || OrderMagicNumber()==MAGIC_NUMBER) continue;
          if(OrderType()==OP_BUY || OrderType()==OP_SELL)
             { blocker="manual/other position on symbol"; return(false); }
       }
@@ -1139,19 +1049,19 @@ bool EntryAllowed(const int dir,string &blocker)
    if(!SessionOK(now)) { blocker="outside session"; return(false); }
    if(BlackoutActive(now)) { blocker="news blackout"; return(false); }
    if(LateFridayBlocked(now)) { blocker="Friday cutoff"; return(false); }
-   if(CooldownSeconds>0 && g_lastEntryTime>0 && now-g_lastEntryTime<CooldownSeconds)
+   if(COOLDOWN_SECONDS>0 && g_lastEntryTime>0 && now-g_lastEntryTime<COOLDOWN_SECONDS)
       { blocker="cooldown"; return(false); }
 
    RefreshDayCache();
-   if(MaxTradesPerDay>0 && g_tradesToday>=MaxTradesPerDay)
+   if(MAX_TRADES_PER_DAY>0 && g_tradesToday>=MAX_TRADES_PER_DAY)
       { blocker="daily trade cap"; return(false); }
    double lossLimit=DailyLossLimit();
    if(lossLimit>0.0 && g_closedPnLToday<=-lossLimit)
       { blocker="DAILY LOSS BRAKE"; return(false); }
-   if(MaxConsecutiveLosses>0 && g_consecLosses>=MaxConsecutiveLosses)
+   if(MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES)
    {
-      if(LossPauseMinutes<=0) { blocker="loss streak - down for the day"; return(false); }
-      if(g_lastLossClose>0 && now-g_lastLossClose<LossPauseMinutes*60)
+      if(LOSS_PAUSE_MINUTES<=0) { blocker="loss streak - down for the day"; return(false); }
+      if(g_lastLossClose>0 && now-g_lastLossClose<LOSS_PAUSE_MINUTES*60)
          { blocker="loss streak pause"; return(false); }
    }
    blocker="";
@@ -1178,38 +1088,39 @@ void PanelRow(const int row,const string text,const color clr)
 
 void UpdatePanel(const bool force=false)
 {
-   if(!ShowPanel) return;
+   if(!SHOW_PANEL) return;
    uint nowMs=GetTickCount();
    if(!force && nowMs-g_lastPanelMs<300) return;   // gold ticks fast; don't redraw 13 labels per tick
    g_lastPanelMs=nowMs;
    RefreshRates();
    RefreshDayCache();
    double lossLimit=DailyLossLimit();
+   bool armed=(IsTesting() || IsTradeAllowed());
 
-   PanelRow(0,"GoldScalper M1/M5  "+Symbol(),clrWhite);
-   PanelRow(1,EnableTrading ? "ARMED - automatic entries ON" :
-              "DISARMED - signals only (EnableTrading=false)",
-              EnableTrading ? clrLimeGreen : clrOrange);
+   PanelRow(0,"GoldScalper M1/M5 v2  "+Symbol(),clrWhite);
+   PanelRow(1,armed ? "ARMED - AutoTrading ON" :
+              "STANDBY - AutoTrading OFF (signals only)",
+              armed ? clrLimeGreen : clrOrange);
    PanelRow(2,StringFormat("Regime  N %.2f  D %.2f  I %.2f  X %.2f  S %.2f",
             g_modeNoise,g_modeDrift,g_modeImpulse,g_modeExhaustion,g_modeShock),clrSilver);
    PanelRow(3,StringFormat("ER %.2f   CUSUM up %.1f / dn %.1f   exp %.2f",
             g_er,g_cusumUp,g_cusumDown,g_expansion),clrSilver);
    PanelRow(4,StringFormat("Spread %.2f (max %.2f)   ATR M1 %.2f  M5 %.2f",
-            Ask-Bid,MaxSpreadUSD,g_atrM1,g_atrM5),
-            (MaxSpreadUSD>0.0 && Ask-Bid>MaxSpreadUSD) ? clrOrange : clrSilver);
+            Ask-Bid,MAX_SPREAD_USD,g_atrM1,g_atrM5),
+            (MAX_SPREAD_USD>0.0 && Ask-Bid>MAX_SPREAD_USD) ? clrOrange : clrSilver);
    PanelRow(5,StringFormat("Session %s   blackout %s   Friday %s",
             SessionOK(TimeCurrent())?"OPEN":"closed",
             BlackoutActive(TimeCurrent())?"ACTIVE":"clear",
             LateFridayBlocked(TimeCurrent())?"BLOCKED":"ok"),clrSilver);
    PanelRow(6,StringFormat("Today  trades %d/%s   closed PnL %.2f%s",
             g_tradesToday,
-            MaxTradesPerDay>0?IntegerToString(MaxTradesPerDay):"-",
+            MAX_TRADES_PER_DAY>0?IntegerToString(MAX_TRADES_PER_DAY):"-",
             g_closedPnLToday,
             lossLimit>0.0?StringFormat("  (brake -%.0f)",lossLimit):""),
             (lossLimit>0.0 && g_closedPnLToday<=-lossLimit) ? clrOrange : clrSilver);
    PanelRow(7,StringFormat("Loss streak %d/%s",g_consecLosses,
-            MaxConsecutiveLosses>0?IntegerToString(MaxConsecutiveLosses):"-"),
-            (MaxConsecutiveLosses>0 && g_consecLosses>=MaxConsecutiveLosses)?clrOrange:clrSilver);
+            MAX_CONSEC_LOSSES>0?IntegerToString(MAX_CONSEC_LOSSES):"-"),
+            (MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES)?clrOrange:clrSilver);
 
    int ticket=FindManagedTicket();
    if(ticket>=0 && OrderSelect(ticket,SELECT_BY_TICKET))
@@ -1228,9 +1139,60 @@ void UpdatePanel(const bool force=false)
    PanelRow(10,(StringLen(g_blocker)==0 ? "Status: watching" : "Blocked by: "+g_blocker),
             StringLen(g_blocker)==0?clrLimeGreen:clrOrange);
    PanelRow(11,"Last: "+g_lastAction,clrSilver);
-   PanelRow(12,StringFormat("Exits  scratch %.2f  launch %.2f/%ds  BE %.2f  trail %.1fxATR@%.2f  hold %dm",
-            ScratchAdverseUSD,LaunchProgressUSD,LaunchWindowSeconds,BreakEvenAtUSD,
-            TrailATRMult,TrailStartUSD,MaxHoldMinutes),clrGray);
+   PanelRow(12,StringFormat("SL %.2f  TP %s  lock %.2f@%.2f  trail %.2f@%.2f  scratch %.2f/%.2f-%ds",
+            StopLoss_PriceUSD,
+            TakeProfit_PriceUSD>0.0?DoubleToString(TakeProfit_PriceUSD,2):"off",
+            LockedProfit_PriceUSD,LockTrigger_PriceUSD,
+            TrailingDistance_PriceUSD,TrailingStart_PriceUSD,
+            SCRATCH_ADVERSE_USD,LAUNCH_PROGRESS_USD,LAUNCH_WINDOW_SECONDS),clrGray);
+}
+
+//+------------------------------------------------------------------+
+//| input validation + orphan sweep                                   |
+//+------------------------------------------------------------------+
+bool ValidateInputs()
+{
+   if(LotSize<=0.0)
+   {
+      Print("GoldScalper: LotSize must be positive.");
+      return(false);
+   }
+   double step=MarketInfo(Symbol(),MODE_LOTSTEP);
+   if(step>0.0 && NormaliseLots(LotSize)<=0.0)
+   {
+      Print("GoldScalper: LotSize ",DoubleToString(LotSize,2),
+            " is below the broker minimum ",
+            DoubleToString(MarketInfo(Symbol(),MODE_MINLOT),LotDigits(step)),".");
+      return(false);
+   }
+   if(StopLoss_PriceUSD<0.0 || TakeProfit_PriceUSD<0.0 ||
+      LockTrigger_PriceUSD<0.0 || LockedProfit_PriceUSD<0.0 ||
+      TrailingStart_PriceUSD<0.0 || TrailingDistance_PriceUSD<0.0)
+   {
+      Print("GoldScalper: price movement inputs cannot be negative.");
+      return(false);
+   }
+   if(LockedProfit_PriceUSD>0.0 && LockTrigger_PriceUSD<=0.0)
+   {
+      Print("GoldScalper: LockedProfit_PriceUSD requires a positive LockTrigger_PriceUSD.");
+      return(false);
+   }
+   if(LockTrigger_PriceUSD>0.0 && LockedProfit_PriceUSD>=LockTrigger_PriceUSD)
+   {
+      Print("GoldScalper: LockedProfit_PriceUSD must be smaller than LockTrigger_PriceUSD.");
+      return(false);
+   }
+   bool trailStart=(TrailingStart_PriceUSD>0.0);
+   bool trailDist=(TrailingDistance_PriceUSD>0.0);
+   if(trailStart!=trailDist)
+   {
+      Print("GoldScalper: TrailingStart_PriceUSD and TrailingDistance_PriceUSD must both be zero or both be positive.");
+      return(false);
+   }
+   if(StopLoss_PriceUSD>0.0 && SCRATCH_ADVERSE_USD>=StopLoss_PriceUSD)
+      Print("GoldScalper: note - StopLoss_PriceUSD is at or inside the software scratch (",
+            DoubleToString(SCRATCH_ADVERSE_USD,2),"); the broker stop will act first.");
+   return(true);
 }
 
 // Sweep per-ticket GlobalVariables left behind by tickets that no
@@ -1239,7 +1201,7 @@ void UpdatePanel(const bool force=false)
 void CleanOrphanedTicketState()
 {
    if(IsTesting()) return;
-   string prefix=StringFormat("GS1.%d.%d.",AccountNumber(),MagicNumber);
+   string prefix=StringFormat("GS1.%d.%d.",AccountNumber(),MAGIC_NUMBER);
    for(int i=GlobalVariablesTotal()-1;i>=0;i--)
    {
       string name=GlobalVariableName(i);
@@ -1268,29 +1230,10 @@ int OnInit()
       Print("GoldScalper: designed to run on the M1 chart. Current: ",Period()," min.");
    if(!ParseSchedules())
    {
-      Print("GoldScalper: could not parse SessionWindows/NewsBlackouts inputs.");
+      Print("GoldScalper: could not parse the frozen session/blackout schedule.");
       return(INIT_FAILED);
    }
-   if(FixedLots<=0.0 || RiskPercent<=0.0 || RiskPercent>10.0)
-   {
-      Print("GoldScalper: FixedLots must be positive; RiskPercent must be in (0,10].");
-      return(INIT_FAILED);
-   }
-   if(HardStopUSD<=0.0 || ScratchAdverseUSD<0.0 || ScratchAdverseUSD>=HardStopUSD)
-   {
-      Print("GoldScalper: require 0 <= ScratchAdverseUSD < HardStopUSD, HardStopUSD > 0.");
-      return(INIT_FAILED);
-   }
-   if(UsePartialBank && (PartialPercent<=0.0 || PartialPercent>=100.0))
-   {
-      Print("GoldScalper: PartialPercent must be between 0 and 100.");
-      return(INIT_FAILED);
-   }
-   if(BreakEvenAtUSD>0.0 && BreakEvenLockUSD>=BreakEvenAtUSD)
-   {
-      Print("GoldScalper: BreakEvenLockUSD must be below BreakEvenAtUSD.");
-      return(INIT_FAILED);
-   }
+   if(!ValidateInputs()) return(INIT_FAILED);
 
    int ticket=FindManagedTicket();
    if(ticket>=0 && OrderSelect(ticket,SELECT_BY_TICKET))
@@ -1301,7 +1244,7 @@ int OnInit()
    CleanOrphanedTicketState();
    EventSetTimer(1);
    g_blocker="waiting for M1/M5 history";
-   g_lastAction=EnableTrading ? "armed" : "attached DISARMED - observe first";
+   g_lastAction="attached";
    UpdatePanel(true);
    return(INIT_SUCCEEDED);
 }
@@ -1320,7 +1263,7 @@ void OnTick()
    if(bar>0 && bar!=g_lastM1Bar)
    {
       g_lastM1Bar=bar;
-      if(iBars(Symbol(),PERIOD_M1)>ERPeriod+60 && iBars(Symbol(),PERIOD_M5)>40)
+      if(iBars(Symbol(),PERIOD_M1)>ER_PERIOD+60 && iBars(Symbol(),PERIOD_M5)>40)
       {
          UpdateRegime(iTime(Symbol(),PERIOD_M1,1));
 
@@ -1342,7 +1285,7 @@ void OnTick()
          {
             // opposite qualified signal while holding: the thesis is dead
             int held=FindManagedTicket();
-            if(held>=0 && ExitOnOppositeSignal && OrderSelect(held,SELECT_BY_TICKET))
+            if(held>=0 && EXIT_ON_OPPOSITE && OrderSelect(held,SELECT_BY_TICKET))
             {
                int heldDir=(OrderType()==OP_BUY ? 1 : -1);
                if(heldDir!=dir) CloseSelectedOrder("OPPOSITE SIGNAL");
@@ -1356,11 +1299,11 @@ void OnTick()
             else
                g_blocker=railBlocker;
          }
-         else if(UseMomentumModule && UseFadeModule)
+         else if(USE_MOMENTUM && USE_FADE)
             g_blocker="mom: "+momBlocker+" | fade: "+fadeBlocker;
-         else if(UseMomentumModule)
+         else if(USE_MOMENTUM)
             g_blocker=momBlocker;
-         else if(UseFadeModule)
+         else if(USE_FADE)
             g_blocker=fadeBlocker;
          else
             g_blocker="all modules off";
