@@ -9,7 +9,7 @@ software long before the broker-side stop is touched.
 
 | Path | What it is |
 |---|---|
-| `mt4/GoldScalperM1M5.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
+| `mt4/GoldScalperM1M5_Version2.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
 | `backtest/` | Tick-replay backtester + free Dukascopy data downloader. |
 | `reference/` | The five prior builds this EA was mined from. |
 
@@ -56,8 +56,8 @@ currently blocking entry, and a CSV trade ledger in `MQL4/Files`.
 
 ## Deploying
 
-1. Copy `mt4/GoldScalperM1M5.mq4` to `MQL4/Experts`, compile (F7),
-   attach to a **XAUUSD M1** chart.
+1. Copy `mt4/GoldScalperM1M5_Version2.mq4` to `MQL4/Experts`, compile
+   (F7), attach to a **XAUUSD M1** chart.
 2. Arming is MT4's own switch: with AutoTrading OFF the EA runs in
    standby, showing every signal and blocker without trading. Turn
    AutoTrading ON to trade.

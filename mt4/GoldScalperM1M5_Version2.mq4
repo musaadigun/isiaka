@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldScalperM1M5.mq4                                                |
+//| GoldScalperM1M5_Version2.mq4                                       |
 //| M1/M5 gold scalper. One position at a time, many trades a day,     |
 //| losses engineered small: any trade that fails to confirm is        |
 //| scratched by software long before the broker-side stop is touched. |
