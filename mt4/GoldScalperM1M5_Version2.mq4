@@ -1,14 +1,17 @@
 //+------------------------------------------------------------------+
 //| GoldScalperM1M5_Version2.mq4                                       |
-//| M1/M5 gold scalper. One position at a time, many trades a day,     |
-//| losses engineered small: any trade that fails to confirm is        |
-//| scratched by software long before the broker-side stop is touched. |
+//| M1/M5 gold entry engine. It decides WHEN to enter; the user owns   |
+//| the trade once it is open.                                         |
 //|                                                                    |
-//| The Inputs tab is intentionally limited to the controls that       |
-//| belong to the user: lot size, SL, TP, profit lock and trailing     |
-//| stop. Everything else - signal engine, regime router, entry rails, |
-//| scratch engine - is a frozen system rule in the const block below  |
-//| and changes only with new backtest evidence.                       |
+//| EXITS ARE YOURS. The EA closes nothing on its own: no time stop,   |
+//| no fast cut, no confirm-or-scratch, no reversal exit. A position   |
+//| ends on your stop loss, your take profit, your profit lock or      |
+//| your trailing stop - or when you close it by hand.                 |
+//|                                                                    |
+//| The Inputs tab carries your trade management plus the three entry  |
+//| limits you asked to control: spread ceiling, daily trade cap and   |
+//| the consecutive-loss pause. The signal engine and regime router    |
+//| remain frozen constants below.                                     |
 //|                                                                    |
 //| All *_PriceUSD values are absolute Gold price movements            |
 //| (2.50 means $2.50 of XAUUSD price).                                |
@@ -25,9 +28,16 @@
 //| AutoTrading OFF to observe signals without trading.                |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "2.00"
+#property version   "2.10"
 #property description "M1/M5 gold scalper: CUSUM burst entries, regime-routed, scratch-first exits."
-#property description "User inputs: lot, SL, TP, profit lock, trailing stop. System rules are frozen."
+#property description "Entries by CUSUM burst + regime router. Exits are owned entirely by the user inputs."
+// v2.10: Removed at the user's instruction - no-chase limit, daily
+//        loss brake, manual-position block, session filter, Friday
+//        cutoff, fast cut, failure-to-launch, opposite-signal exit.
+//        Promoted to inputs - spread ceiling, daily trade cap,
+//        consecutive-loss pause. Retained as frozen rules - cooldown,
+//        one position at a time, regime/signal gates, news blackout
+//        (inactive by default), close-if-unprotected, gold-only.
 // v2.00: Inputs reduced to user trade management (GoldSeek-style);
 //        MaxHold time stop removed; partial banking removed; trailing
 //        is now a manual fixed distance. Day-cache scratch buffers are
@@ -38,37 +48,26 @@
 
 // ------------------------ USER INPUTS -------------------------------
 input double LotSize                   = 0.01;
-input double StopLoss_PriceUSD         = 2.50;   // broker-side stop; 0 = none (software scratch still active)
+input double StopLoss_PriceUSD         = 2.50;   // broker-side stop; 0 = no stop
 input double TakeProfit_PriceUSD       = 0.00;   // 0 = no fixed TP (lock/trail manage the win)
 input double LockTrigger_PriceUSD      = 0.60;   // at this favorable movement, lock profit; 0 = off
 input double LockedProfit_PriceUSD     = 0.10;   // SL moves to entry +/- this once triggered
 input double TrailingStart_PriceUSD    = 0.90;   // trailing activates from this favorable movement; 0 = off
 input double TrailingDistance_PriceUSD = 0.60;   // trailing gap behind price; 0 = off
+input double MaxSpread_PriceUSD        = 0.35;   // no entry above this spread; 0 = no ceiling
+input int    MaxTradesPerDay           = 15;     // 0 = uncapped
+input int    MaxConsecutiveLosses      = 3;      // pause after this many losses in a row; 0 = off
+input int    LossPauseMinutes          = 90;     // length of that pause; 0 = stand down for the rest of the day
 
 // ------------------------ FROZEN SYSTEM RULES -----------------------
-// Scalp scratch engine
-const double SCRATCH_ADVERSE_USD   = 0.80;   // software fast-cut, fires before the broker stop
-const int    LAUNCH_WINDOW_SECONDS = 90;     // confirm-or-scratch window
-const double LAUNCH_PROGRESS_USD   = 0.30;   // must reach this inside the window
-const bool   EXIT_ON_OPPOSITE      = true;   // opposite qualified signal closes the trade
+// Exit behaviour: the position is owned by the user inputs above
+// (SL / TP / lock / trail). The EA adds no exits of its own.
 const double TRAIL_STEP_USD        = 0.05;   // stop-modify hysteresis
 // Entry rails
-const double MAX_SPREAD_USD        = 0.35;
-const double MAX_CHASE_USD         = 0.30;   // max distance from signal close at fire time
 const int    COOLDOWN_SECONDS      = 120;
-const int    MAX_TRADES_PER_DAY    = 15;     // 0 disables
-const double MAX_DAILY_LOSS_PCT    = 1.5;    // of day-start balance; 0 disables
-const double MAX_DAILY_LOSS_USD    = 0.0;    // absolute cap; stricter of the two applies
-const int    MAX_CONSEC_LOSSES     = 3;      // 0 disables
-const int    LOSS_PAUSE_MINUTES    = 90;     // 0 = stand down for the rest of the day
-const bool   BLOCK_MANUAL_POSITION = true;   // stand aside while a non-EA position is open
-const bool   USE_SESSION_FILTER    = true;
-const string SESSION_WINDOWS       = "09:00-12:00,14:30-20:00";  // broker time
 const string NEWS_BLACKOUTS        = "";     // "HH:MM,HH:MM" broker time; empty disables
 const int    BLACKOUT_MIN_BEFORE   = 15;
 const int    BLACKOUT_MIN_AFTER    = 10;
-const bool   BLOCK_LATE_FRIDAY     = true;
-const int    FRIDAY_CUTOFF_HOUR    = 20;     // broker hour
 const bool   ALLOW_LONGS           = true;
 const bool   ALLOW_SHORTS          = true;
 // Momentum module
@@ -171,13 +170,11 @@ string   g_lastAction="attached";
 
 // ------------------------ position state ----------------------------
 int      g_posTicket=-1;
-bool     g_posLaunched=false;
 double   g_posMaxFav=0.0;
 bool     g_pendingClose=false;
 string   g_pendingCloseReason="";
 int      g_stopRepairTicket=-1;
 int      g_stopRepairFailures=0;
-int      g_adverseHits=0;
 datetime g_lastEntryTime=0;
 uint     g_lastPanelMs=0;
 
@@ -197,8 +194,6 @@ double   g_dcProfits[200];
 datetime g_dcOpens[400];
 
 // ------------------------ parsed schedules --------------------------
-int      g_sessStart[GS_MAX_WINDOWS], g_sessEnd[GS_MAX_WINDOWS];
-int      g_sessCount=0;
 int      g_newsMinute[GS_MAX_WINDOWS];
 int      g_newsCount=0;
 
@@ -270,26 +265,7 @@ int MinuteOfString(string hhmm)
 
 bool ParseSchedules()
 {
-   g_sessCount=0;
    g_newsCount=0;
-   string parts[];
-   int n=StringSplit(SESSION_WINDOWS,',',parts);
-   for(int i=0;i<n && g_sessCount<GS_MAX_WINDOWS;i++)
-   {
-      string w=parts[i];
-      StringTrimLeft(w); StringTrimRight(w);
-      if(StringLen(w)==0) continue;
-      int dash=StringFind(w,"-");
-      if(dash<0) return(false);
-      int a=MinuteOfString(StringSubstr(w,0,dash));
-      int b=MinuteOfString(StringSubstr(w,dash+1));
-      if(a<0 || b<0) return(false);
-      g_sessStart[g_sessCount]=a;
-      g_sessEnd[g_sessCount]=b;
-      g_sessCount++;
-   }
-   if(USE_SESSION_FILTER && g_sessCount==0) return(false);
-
    if(StringLen(NEWS_BLACKOUTS)>0)
    {
       string times[];
@@ -308,19 +284,6 @@ bool ParseSchedules()
    return(true);
 }
 
-bool SessionOK(const datetime t)
-{
-   if(!USE_SESSION_FILTER) return(true);
-   int m=TimeHour(t)*60+TimeMinute(t);
-   for(int i=0;i<g_sessCount;i++)
-   {
-      int a=g_sessStart[i], b=g_sessEnd[i];
-      bool inWindow=(a<=b) ? (m>=a && m<b) : (m>=a || m<b);   // start>end wraps midnight
-      if(inWindow) return(true);
-   }
-   return(false);
-}
-
 bool BlackoutActive(const datetime t)
 {
    if(g_newsCount==0) return(false);
@@ -331,12 +294,6 @@ bool BlackoutActive(const datetime t)
       if(diff>=-BLACKOUT_MIN_BEFORE && diff<=BLACKOUT_MIN_AFTER) return(true);
    }
    return(false);
-}
-
-bool LateFridayBlocked(const datetime t)
-{
-   if(!BLOCK_LATE_FRIDAY) return(false);
-   return(TimeDayOfWeek(t)==5 && TimeHour(t)>=FRIDAY_CUTOFF_HOUR);
 }
 
 //+------------------------------------------------------------------+
@@ -681,19 +638,6 @@ void RefreshDayCache()
    g_lastLossClose=lastLoss;
 }
 
-double DailyLossLimit()
-{
-   double limit=0.0;
-   if(MAX_DAILY_LOSS_PCT>0.0)
-   {
-      double dayStartBalance=AccountBalance()-g_closedPnLToday;
-      limit=dayStartBalance*MAX_DAILY_LOSS_PCT/100.0;
-   }
-   if(MAX_DAILY_LOSS_USD>0.0)
-      limit=(limit>0.0 ? MathMin(limit,MAX_DAILY_LOSS_USD) : MAX_DAILY_LOSS_USD);
-   return(limit);
-}
-
 //+------------------------------------------------------------------+
 //| ledger                                                            |
 //+------------------------------------------------------------------+
@@ -750,29 +694,23 @@ void PersistTicketState(const int ticket)
 {
    if(IsTesting()) return;
    GlobalVariableSet(TicketKey(ticket,"MF"),g_posMaxFav);
-   GlobalVariableSet(TicketKey(ticket,"LN"),g_posLaunched?1.0:0.0);
 }
 
 void DropTicketState(const int ticket)
 {
    if(IsTesting() || ticket<0) return;
    GlobalVariableDel(TicketKey(ticket,"MF"));
-   GlobalVariableDel(TicketKey(ticket,"LN"));
 }
 
 // Adopt a position found in the terminal (fresh entry or restart).
 void AdoptTicket(const int ticket)
 {
    g_posTicket=ticket;
-   g_adverseHits=0;
    g_posMaxFav=MathMax(0.0,ProfitMovementSelected());
-   g_posLaunched=(g_posMaxFav>=LAUNCH_PROGRESS_USD);
    if(!IsTesting())
    {
       if(GlobalVariableCheck(TicketKey(ticket,"MF")))
          g_posMaxFav=MathMax(g_posMaxFav,GlobalVariableGet(TicketKey(ticket,"MF")));
-      if(GlobalVariableCheck(TicketKey(ticket,"LN")))
-         g_posLaunched=(g_posLaunched || GlobalVariableGet(TicketKey(ticket,"LN"))>0.5);
       PersistTicketState(ticket);
    }
 }
@@ -781,8 +719,6 @@ void ForgetPosition()
 {
    DropTicketState(g_posTicket);
    g_posTicket=-1;
-   g_adverseHits=0;
-   g_posLaunched=false;
    g_posMaxFav=0.0;
    g_pendingClose=false;
    g_pendingCloseReason="";
@@ -844,11 +780,9 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
    if(ask<=0.0 || bid<=0.0 || ask<bid)
       { g_lastAction="ENTRY BLOCKED: NO QUOTE"; return(false); }
    double spread=ask-bid;
-   if(MAX_SPREAD_USD>0.0 && spread>MAX_SPREAD_USD)
+   if(MaxSpread_PriceUSD>0.0 && spread>MaxSpread_PriceUSD)
       { g_lastAction="ENTRY BLOCKED: SPREAD"; return(false); }
    double entry=(dir>0 ? ask : bid);
-   if(MAX_CHASE_USD>0.0 && MathAbs(entry-reference)>MAX_CHASE_USD)
-      { g_lastAction="ENTRY BLOCKED: PRICE MOVED - NO CHASE"; return(false); }
 
    double lots=NormaliseLots(LotSize);
    if(lots<=0.0) { g_lastAction="ENTRY BLOCKED: LOT INVALID"; return(false); }
@@ -878,7 +812,7 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
    {
       RefreshRates();
       entry=(dir>0 ? Ask : Bid);
-      if(MAX_SPREAD_USD>0.0 && Ask-Bid>MAX_SPREAD_USD)
+      if(MaxSpread_PriceUSD>0.0 && Ask-Bid>MaxSpread_PriceUSD)
          { g_lastAction="ENTRY ABORTED: SPREAD"; return(false); }
       ResetLastError();
       ticket=OrderSend(Symbol(),type,lots,entry,SlippagePoints(),0.0,0.0,comment,MAGIC_NUMBER,0,
@@ -1037,35 +971,16 @@ void ManagePosition()
    if(g_pendingClose) { CloseSelectedOrder(g_pendingCloseReason); return; }
    if(!EnsureStopProtection()) return;
 
+   // Track the best favourable excursion: the lock and the trailing
+   // stop are both measured from it. No EA-initiated exits beyond the
+   // user's SL / TP / lock / trail.
    double movement=ProfitMovementSelected();
    if(movement>g_posMaxFav)
    {
-      bool crossedLaunch=(!g_posLaunched && movement>=LAUNCH_PROGRESS_USD);
-      if(crossedLaunch) g_posLaunched=true;
-      if(crossedLaunch || movement-g_posMaxFav>0.05)
-      {
-         g_posMaxFav=movement;
-         PersistTicketState(ticket);
-      }
-      else
-         g_posMaxFav=movement;
+      bool persist=(movement-g_posMaxFav>0.05);
+      g_posMaxFav=movement;
+      if(persist) PersistTicketState(ticket);
    }
-
-   // 1. fast cut: the working loss limit, inside the broker stop.
-   //    Movement is measured close-side, so a one-tick spread spike can
-   //    breach it; require two consecutive breaches before cutting.
-   if(SCRATCH_ADVERSE_USD>0.0 && movement<=-SCRATCH_ADVERSE_USD)
-   {
-      g_adverseHits++;
-      if(g_adverseHits>=2) { CloseSelectedOrder("FAST CUT"); return; }
-   }
-   else
-      g_adverseHits=0;
-
-   // 2. confirm-or-scratch: no launch inside the window = dead trade
-   if(LAUNCH_WINDOW_SECONDS>0 && !g_posLaunched &&
-      TimeCurrent()-OrderOpenTime()>=LAUNCH_WINDOW_SECONDS)
-      { CloseSelectedOrder("FAILURE TO LAUNCH"); return; }
 
    ApplyStopManagement();
 }
@@ -1079,34 +994,19 @@ bool EntryAllowed(const int dir,string &blocker)
    if(dir<0 && !ALLOW_SHORTS) { blocker="shorts disabled"; return(false); }
    if(!IsTesting() && !IsTradeAllowed()) { blocker="AutoTrading off"; return(false); }
    if(FindManagedTicket()>=0) { blocker="position open"; return(false); }
-   if(BLOCK_MANUAL_POSITION)
-   {
-      for(int i=OrdersTotal()-1;i>=0;i--)
-      {
-         if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
-         if(OrderSymbol()!=Symbol() || OrderMagicNumber()==MAGIC_NUMBER) continue;
-         if(OrderType()==OP_BUY || OrderType()==OP_SELL)
-            { blocker="manual/other position on symbol"; return(false); }
-      }
-   }
 
    datetime now=TimeCurrent();
-   if(!SessionOK(now)) { blocker="outside session"; return(false); }
    if(BlackoutActive(now)) { blocker="news blackout"; return(false); }
-   if(LateFridayBlocked(now)) { blocker="Friday cutoff"; return(false); }
    if(COOLDOWN_SECONDS>0 && g_lastEntryTime>0 && now-g_lastEntryTime<COOLDOWN_SECONDS)
       { blocker="cooldown"; return(false); }
 
    RefreshDayCache();
-   if(MAX_TRADES_PER_DAY>0 && g_tradesToday>=MAX_TRADES_PER_DAY)
+   if(MaxTradesPerDay>0 && g_tradesToday>=MaxTradesPerDay)
       { blocker="daily trade cap"; return(false); }
-   double lossLimit=DailyLossLimit();
-   if(lossLimit>0.0 && g_closedPnLToday<=-lossLimit)
-      { blocker="DAILY LOSS BRAKE"; return(false); }
-   if(MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES)
+   if(MaxConsecutiveLosses>0 && g_consecLosses>=MaxConsecutiveLosses)
    {
-      if(LOSS_PAUSE_MINUTES<=0) { blocker="loss streak - down for the day"; return(false); }
-      if(g_lastLossClose>0 && now-g_lastLossClose<LOSS_PAUSE_MINUTES*60)
+      if(LossPauseMinutes<=0) { blocker="loss streak - down for the day"; return(false); }
+      if(g_lastLossClose>0 && now-g_lastLossClose<LossPauseMinutes*60)
          { blocker="loss streak pause"; return(false); }
    }
    blocker="";
@@ -1205,7 +1105,7 @@ void CreatePanel()
             PANEL_BG,PANEL_BORDER,0);
    PanelText("Title","XVISION  |  GOLD SCALPER M1/M5 V2",PANEL_LABEL_X,22,
              PANEL_TITLE,13);
-   PanelText("Subtitle","M1 TRIGGER  |  M5 CONTEXT  |  ONE TRADE",PANEL_LABEL_X,42,
+   PanelText("Subtitle","M1 TRIGGER  |  M5 CONTEXT  |  YOUR EXITS",PANEL_LABEL_X,42,
              PANEL_MUTED,9);
    PanelDivider("HeaderLine",58);
 
@@ -1220,7 +1120,7 @@ void CreatePanel()
    PanelPair("Stp","Stop loss / take profit",ROW_STP);
    PanelPair("Lck","Lock trigger / locked profit",ROW_LCK);
    PanelPair("Trl","Trailing start / distance",ROW_TRL);
-   PanelPair("Scr","Fast cut / launch window",ROW_SCR);
+   PanelPair("Scr","Spread ceiling / daily cap",ROW_SCR);
    PanelPair("Own","Exit ownership",ROW_OWN);
 
    PanelSection("En","ENGINE",285,299);
@@ -1232,11 +1132,11 @@ void CreatePanel()
    PanelPair("Tim","Broker time",ROW_TIM);
    PanelPair("Prc","Live Bid / Ask",ROW_PRC);
    PanelPair("Spr","Spread / permission",ROW_SPR);
-   PanelPair("Ses","Session / blackout / Friday",ROW_SES);
+   PanelPair("Ses","News blackout / loss pause",ROW_SES);
 
    PanelDivider("FooterLine",452);
    PanelText("Today","--",PANEL_LABEL_X,ROW_TODAY,PANEL_VALUE,9);
-   PanelText("Footer","ONE POSITION  |  SCRATCH-FIRST EXITS  |  DAILY BRAKE ARMED",
+   PanelText("Footer","ONE POSITION  |  EXITS OWNED BY YOUR INPUTS",
              PANEL_LABEL_X,ROW_FOOTER,PANEL_MUTED,8);
 }
 
@@ -1256,20 +1156,20 @@ void UpdatePanel(const bool force=false)
 
    RefreshRates();
    RefreshDayCache();
-   double lossLimit=DailyLossLimit();
    bool armed=(IsTesting() || IsTradeAllowed());
    int ticket=FindManagedTicket();
    bool havePos=(ticket>=0 && OrderSelect(ticket,SELECT_BY_TICKET));
-   bool brakeHit=(lossLimit>0.0 && g_closedPnLToday<=-lossLimit);
-   bool streakHit=(MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES);
+   bool capHit=(MaxTradesPerDay>0 && g_tradesToday>=MaxTradesPerDay);
+   bool streakHit=(MaxConsecutiveLosses>0 && g_consecLosses>=MaxConsecutiveLosses &&
+                   (LossPauseMinutes<=0 ||
+                    (g_lastLossClose>0 && TimeCurrent()-g_lastLossClose<LossPauseMinutes*60)));
 
    //--- headline state
    string state; color stateClr;
    if(!armed)                      { state="STANDBY - AUTOTRADING IS OFF";   stateClr=PANEL_AMBER; }
    else if(havePos)                { state="MANAGING LIVE POSITION";         stateClr=PANEL_GREEN; }
-   else if(brakeHit)               { state="DAILY LOSS BRAKE - STOOD DOWN";  stateClr=PANEL_RED;   }
+   else if(capHit)                 { state="DAILY TRADE CAP REACHED";        stateClr=PANEL_AMBER; }
    else if(streakHit)              { state="LOSS STREAK - PAUSED";           stateClr=PANEL_RED;   }
-   else if(!SessionOK(TimeCurrent())) { state="OUTSIDE SESSION WINDOW";      stateClr=PANEL_MUTED; }
    else if(BlackoutActive(TimeCurrent())) { state="NEWS BLACKOUT";           stateClr=PANEL_AMBER; }
    else if(g_signalDir!=0)         { state="QUALIFIED SIGNAL";               stateClr=PANEL_GREEN; }
    else                            { state="SCANNING FOR A QUALIFIED BURST"; stateClr=PANEL_VALUE; }
@@ -1307,12 +1207,18 @@ void UpdatePanel(const bool force=false)
               LockTrigger_PriceUSD>0.0?PANEL_GREEN:PANEL_MUTED);
    PanelValue("Trl",ROW_TRL,PanelPrice(TrailingStart_PriceUSD)+" / "+PanelPrice(TrailingDistance_PriceUSD),
               (TrailingStart_PriceUSD>0.0&&TrailingDistance_PriceUSD>0.0)?PANEL_GREEN:PANEL_MUTED);
-   PanelValue("Scr",ROW_SCR,StringFormat("$%.2f / +$%.2f in %ds",
-              SCRATCH_ADVERSE_USD,LAUNCH_PROGRESS_USD,LAUNCH_WINDOW_SECONDS),PANEL_VALUE);
-   string ownership="EA scratch";
-   if(StopLoss_PriceUSD>0.0)   ownership=ownership+" + EA SL";
-   if(TakeProfit_PriceUSD>0.0) ownership=ownership+" + EA TP";
-   PanelValue("Own",ROW_OWN,ownership,PANEL_VALUE);
+   PanelValue("Scr",ROW_SCR,StringFormat("%s / %s",
+              MaxSpread_PriceUSD>0.0?"$"+DoubleToString(MaxSpread_PriceUSD,2):"off",
+              MaxTradesPerDay>0?IntegerToString(MaxTradesPerDay):"uncapped"),
+              capHit?PANEL_AMBER:PANEL_VALUE);
+   string ownership="";
+   if(StopLoss_PriceUSD>0.0)   ownership="EA SL";
+   if(TakeProfit_PriceUSD>0.0) ownership=(StringLen(ownership)>0?ownership+" + EA TP":"EA TP");
+   if(TrailingStart_PriceUSD>0.0 && TrailingDistance_PriceUSD>0.0)
+      ownership=(StringLen(ownership)>0?ownership+" + trail":"trail");
+   if(StringLen(ownership)==0) ownership="MANUAL - no EA exit";
+   PanelValue("Own",ROW_OWN,ownership,
+              StringLen(ownership)>0 && StopLoss_PriceUSD<=0.0 ? PANEL_AMBER : PANEL_VALUE);
 
    //--- engine
    PanelValue("Reg",ROW_REG,StringFormat("%.2f  %.2f  %.2f  %.2f  %.2f",
@@ -1326,24 +1232,22 @@ void UpdatePanel(const bool force=false)
    PanelValue("Tim",ROW_TIM,TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),PANEL_AMBER);
    PanelValue("Prc",ROW_PRC,DoubleToString(Bid,Digits)+" / "+DoubleToString(Ask,Digits),PANEL_VALUE);
    double spread=Ask-Bid;
-   bool spreadOK=(MAX_SPREAD_USD<=0.0 || spread<=MAX_SPREAD_USD);
-   PanelValue("Spr",ROW_SPR,StringFormat("%.2f (max %.2f) / %s",spread,MAX_SPREAD_USD,
+   bool spreadOK=(MaxSpread_PriceUSD<=0.0 || spread<=MaxSpread_PriceUSD);
+   PanelValue("Spr",ROW_SPR,StringFormat("%.2f (max %.2f) / %s",spread,MaxSpread_PriceUSD,
               armed?"ENABLED":"DISABLED"),
               (spreadOK&&armed)?PANEL_GREEN:PANEL_AMBER);
-   PanelValue("Ses",ROW_SES,StringFormat("%s / %s / %s",
-              SessionOK(TimeCurrent())?"OPEN":"CLOSED",
+   PanelValue("Ses",ROW_SES,StringFormat("%s / %s",
               BlackoutActive(TimeCurrent())?"ACTIVE":"clear",
-              LateFridayBlocked(TimeCurrent())?"BLOCKED":"ok"),
-              SessionOK(TimeCurrent())?PANEL_GREEN:PANEL_MUTED);
+              streakHit?"PAUSED":"clear"),
+              (BlackoutActive(TimeCurrent())||streakHit)?PANEL_AMBER:PANEL_GREEN);
 
    //--- today
-   string today=StringFormat("TODAY   trades %d/%s   PnL %+.2f   streak %d/%s%s",
-      g_tradesToday,MAX_TRADES_PER_DAY>0?IntegerToString(MAX_TRADES_PER_DAY):"unc",
+   string today=StringFormat("TODAY   trades %d/%s   PnL %+.2f   streak %d/%s",
+      g_tradesToday,MaxTradesPerDay>0?IntegerToString(MaxTradesPerDay):"unc",
       g_closedPnLToday,g_consecLosses,
-      MAX_CONSEC_LOSSES>0?IntegerToString(MAX_CONSEC_LOSSES):"-",
-      lossLimit>0.0?StringFormat("   brake -%.0f",lossLimit):"");
+      MaxConsecutiveLosses>0?IntegerToString(MaxConsecutiveLosses):"-");
    PanelText("Today",today,PANEL_LABEL_X,ROW_TODAY,
-             (brakeHit||streakHit)?PANEL_RED:(g_closedPnLToday>0.0?PANEL_GREEN:PANEL_VALUE),9);
+             streakHit?PANEL_RED:(g_closedPnLToday>0.0?PANEL_GREEN:PANEL_VALUE),9);
    PanelText("Footer",PanelFit("LAST: "+g_lastAction,62),PANEL_LABEL_X,ROW_FOOTER,PANEL_MUTED,8);
 }
 
@@ -1389,9 +1293,16 @@ bool ValidateInputs()
       Print("GoldScalper: TrailingStart_PriceUSD and TrailingDistance_PriceUSD must both be zero or both be positive.");
       return(false);
    }
-   if(StopLoss_PriceUSD>0.0 && SCRATCH_ADVERSE_USD>=StopLoss_PriceUSD)
-      Print("GoldScalper: note - StopLoss_PriceUSD is at or inside the software scratch (",
-            DoubleToString(SCRATCH_ADVERSE_USD,2),"); the broker stop will act first.");
+   if(MaxSpread_PriceUSD<0.0 || MaxTradesPerDay<0 || MaxConsecutiveLosses<0 ||
+      LossPauseMinutes<0)
+   {
+      Print("GoldScalper: MaxSpread/MaxTradesPerDay/MaxConsecutiveLosses/LossPauseMinutes cannot be negative.");
+      return(false);
+   }
+   if(StopLoss_PriceUSD<=0.0 && TakeProfit_PriceUSD<=0.0 &&
+      (TrailingStart_PriceUSD<=0.0 || TrailingDistance_PriceUSD<=0.0))
+      Print("GoldScalper: note - no SL, no TP and no trailing stop are set. ",
+            "Open positions will be closed only by you.");
    return(true);
 }
 
@@ -1484,13 +1395,6 @@ void OnTick()
 
          if(dir!=0)
          {
-            // opposite qualified signal while holding: the thesis is dead
-            int held=FindManagedTicket();
-            if(held>=0 && EXIT_ON_OPPOSITE && OrderSelect(held,SELECT_BY_TICKET))
-            {
-               int heldDir=(OrderType()==OP_BUY ? 1 : -1);
-               if(heldDir!=dir) CloseSelectedOrder("OPPOSITE SIGNAL");
-            }
             string railBlocker="";
             if(EntryAllowed(dir,railBlocker))
             {
