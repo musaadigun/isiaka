@@ -1,6 +1,6 @@
 # Backtest harness
 
-Tick-replay validation for `mt4/GoldScalperM1M5_Version3.mq4`. The engine mirrors
+Tick-replay validation for `mt4/GoldScalperM1M5_Version4.mq4`. The engine mirrors
 the EA's decision logic function-for-function and replays it over real
 bid/ask ticks, so spread — the gold scalper's #1 opponent — is inside
 every number it prints. MT4's own strategy tester interpolates M1 ticks
@@ -20,7 +20,7 @@ already downloaded.
 
 ```bash
 python3 engine.py --data 'data/XAUUSD_*.csv' \
-    --balance 10000 --risk 0.5 \
+    --balance 10000 --lots 0.01 \
     --commission 7.0 --slippage 0.03 \
     --trades-out trades.csv
 ```
@@ -30,16 +30,16 @@ trip, and use `--spread-add 0.05` as a stress test (results should
 degrade gracefully, not collapse — a strategy that dies from +$0.05
 spread has no real edge).
 
-`--no-sessions` trades around the clock; the default restricts entries
-to London/NY hours (UTC). The EA's session inputs are **broker time** —
-translate before comparing runs.
+The engine trades around the clock, matching the EA (which has no
+session filter). `--sessions` adds an optional London/NY window if you
+want to measure what one would do; `--lots 0` switches from the EA's
+fixed lot to risk-based sizing.
 
 ## 3. Read results honestly
 
 The summary prints expectancy per trade, profit factor, max drawdown,
 worst day, and two diagnostic maps: `exit_reasons` (how trades end —
-a healthy scalper shows many small FAST CUT / FAILURE TO LAUNCH exits
-and fewer, larger TRAIL STOP wins) and `blocked` (why signals didn't
+with the v4 exit set these are HARD STOP, TRAIL STOP and TAKE PROFIT) and `blocked` (why signals didn't
 fire — this is the tuning map).
 
 Rules of the road, in order:

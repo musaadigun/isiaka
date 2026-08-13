@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5.
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 4).
 
-Mirrors the EA's decision logic (same velocity composites, efficiency
-ratio, CUSUM burst detector, five-mode regime posterior and the same
-scratch-first exit ladder) and replays it over real bid/ask ticks, so
-every result is net of spread. MT4's strategy tester interpolates M1
-ticks and will overstate a scalper's edge; this harness exists so
-thresholds are set from evidence.
+Mirrors the EA's decision logic - same velocity composites, efficiency
+ratio, CUSUM burst detector, five-mode regime posterior - and the same
+exit set: the user's stop loss, take profit, profit lock and trailing
+stop, and nothing else. Replays it over real bid/ask ticks, so every
+result is net of spread. MT4's strategy tester interpolates M1 ticks
+and will overstate a scalper's edge; this harness exists so thresholds
+are set from evidence.
 
 Input tick CSVs: time_ms,bid,ask   (UTC, as produced by
-download_dukascopy.py). Session windows here are therefore UTC — the
-EA's session inputs are broker time, so translate before comparing.
+download_dukascopy.py). Timestamps here are UTC; the EA runs on broker
+time, which matters only if you switch the optional session filter on.
 
 Usage:
   python3 engine.py --data 'data/XAUUSD_*.csv' --balance 10000 \
-      --commission 7.0 --trades-out trades.csv
+      --lots 0.01 --commission 7.0 --trades-out trades.csv
 """
 
 import argparse
@@ -31,14 +32,16 @@ from dataclasses import dataclass, field, asdict
 # --------------------------------------------------------------------------
 @dataclass
 class Config:
-    # sizing / catastrophe stop
-    risk_percent: float = 0.5
-    hard_stop_usd: float = 2.50
-    # scalp exit engine (v2.00 EA: lock/trail/TP are the user inputs;
-    # max hold and partial banking were removed from the EA - keep the
-    # mechanisms here for experiments but default them off)
-    scratch_adverse_usd: float = 0.80
-    launch_window_seconds: int = 90
+    # sizing / stop
+    risk_percent: float = 0.5            # used only when fixed_lots is 0
+    hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
+    # Exit engine. Mirrors EA v4: the ONLY exits are the user's SL, TP,
+    # profit lock and trailing stop. The scratch mechanisms below were
+    # removed from the EA and default to off; they remain here so the
+    # effect of re-adding one can be measured before it is written back
+    # into the EA.
+    scratch_adverse_usd: float = 0.0     # EA v3+: removed
+    launch_window_seconds: int = 0       # EA v3+: removed
     launch_progress_usd: float = 0.30
     take_profit_usd: float = 0.0
     breakeven_at_usd: float = 0.60       # EA: LockTrigger_PriceUSD
@@ -48,20 +51,20 @@ class Config:
     partial_percent: float = 50.0
     trail_start_usd: float = 0.90        # EA: TrailingStart_PriceUSD
     trailing_distance_usd: float = 0.60  # EA: TrailingDistance_PriceUSD
-    max_hold_minutes: int = 0
-    exit_on_opposite: bool = True
-    fixed_lots: float = 0.0              # >0 mirrors the EA's LotSize; 0 = risk-based sizing
+    max_hold_minutes: int = 0            # EA v2+: removed
+    exit_on_opposite: bool = False        # EA v3+: removed
+    fixed_lots: float = 0.01             # EA: LotSize (0 = risk-based sizing instead)
     # entry rails
-    max_spread_usd: float = 0.35
-    max_chase_usd: float = 0.30
-    cooldown_seconds: int = 120
-    max_trades_per_day: int = 15
-    max_daily_loss_percent: float = 1.5
-    max_consecutive_losses: int = 3
-    loss_pause_minutes: int = 90
+    max_spread_usd: float = 0.35         # EA: MaxSpread_PriceUSD
+    max_chase_usd: float = 0.0           # EA v3+: removed
+    cooldown_seconds: int = 120          # EA: frozen constant
+    max_trades_per_day: int = 15         # EA: MaxTradesPerDay
+    max_daily_loss_percent: float = 0.0  # EA v3+: removed
+    max_consecutive_losses: int = 3      # EA: MaxConsecutiveLosses
+    loss_pause_minutes: int = 90         # EA: LossPauseMinutes
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
-    use_session_filter: bool = True
-    friday_cutoff_hour_utc: int = 18
+    use_session_filter: bool = False     # EA v3+: removed
+    friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
     # momentum module
     use_momentum: bool = True
     cusum_allowance: float = 0.18
@@ -444,7 +447,8 @@ class Backtester:
                 a <= tm < b if a <= b else (tm >= a or tm < b)
                 for a, b in cfg.sessions_utc):
             return self.block_entry("outside session")
-        if dow == 5 and tm // 60 >= cfg.friday_cutoff_hour_utc:
+        if (cfg.friday_cutoff_hour_utc > 0 and dow == 5
+                and tm // 60 >= cfg.friday_cutoff_hour_utc):
             return self.block_entry("friday cutoff")
         if (cfg.cooldown_seconds > 0 and self.last_entry_time is not None
                 and t_s - self.last_entry_time < cfg.cooldown_seconds):
@@ -738,7 +742,10 @@ def main():
     ap.add_argument("--data", required=True,
                     help="glob for tick CSVs (time_ms,bid,ask), e.g. 'data/XAUUSD_*.csv'")
     ap.add_argument("--balance", type=float, default=10000.0)
-    ap.add_argument("--risk", type=float, default=0.5, help="risk %% per trade")
+    ap.add_argument("--risk", type=float, default=0.5,
+                    help="risk %% per trade (only used when --lots 0)")
+    ap.add_argument("--lots", type=float, default=0.01,
+                    help="fixed lot size, mirroring the EA's LotSize; 0 = risk-based")
     ap.add_argument("--commission", type=float, default=7.0,
                     help="round-trip commission per lot")
     ap.add_argument("--slippage", type=float, default=0.03,
@@ -746,8 +753,8 @@ def main():
     ap.add_argument("--spread-add", type=float, default=0.0,
                     help="widen recorded spreads by this many USD (stress test)")
     ap.add_argument("--enable-fade", action="store_true")
-    ap.add_argument("--no-sessions", action="store_true",
-                    help="disable the session filter (trade 24h)")
+    ap.add_argument("--sessions", action="store_true",
+                    help="apply a London/NY session filter (the EA has none)")
     ap.add_argument("--trades-out", default=None, help="write per-trade CSV here")
     ap.add_argument("--json", action="store_true", help="print summary as JSON only")
     args = ap.parse_args()
@@ -757,9 +764,10 @@ def main():
         sys.exit(f"no files match {args.data!r} - run download_dukascopy.py first")
 
     cfg = Config(balance=args.balance, risk_percent=args.risk,
+                 fixed_lots=args.lots,
                  commission_per_lot=args.commission, slippage_usd=args.slippage,
                  spread_add_usd=args.spread_add, use_fade=args.enable_fade,
-                 use_session_filter=not args.no_sessions)
+                 use_session_filter=args.sessions)
     summary = run(files, cfg, trades_out=args.trades_out)
     if args.json:
         print(json.dumps(summary, indent=2))

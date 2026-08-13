@@ -172,3 +172,23 @@ Checked and found sound, so they are not re-litigated above:
 2. H1 (ledger exits) — without it there is no record to tune from.
 3. H4 (backtester alignment) — without it there is no validation.
 4. M1–M6 as time allows.
+
+---
+
+## Resolution — shipped in Version 4
+
+Defects only; no trading rule was added, removed or altered.
+
+| Finding | Status in v4 |
+|---|---|
+| H1 ledger misses exits | **Fixed.** When the position disappears, the EA recovers it from history and writes the EXIT row with the real close price, profit and an inferred reason (stop/trail hit, take profit hit, or closed manually). |
+| H2 broker stop distance | **Fixed.** The broker minimum is read at attach and printed, with a warning if your SL/TP sit inside it. Entries now place stops at the broker minimum when your setting is tighter, instead of being rejected, opening naked and closing immediately. |
+| H3 no exit when exits are zeroed | **Left as designed.** Your rule; the startup note and the panel's `MANUAL - no EA exit` remain. |
+| H4 backtester mismatch | **Fixed.** engine.py mirrors v4: scratch, launch window, session filter, Friday cutoff, no-chase, daily brake and opposite-signal exit all default off; `--lots` mirrors `LotSize`. |
+| M1 lock/trail see only observed ticks | **Inherent**, not fixable in MQL4; documented. |
+| M2 cooldown resets on restart | **Fixed.** Last entry time persists in a GlobalVariable. |
+| M3 streak counts legs | **Fixed.** Legs sharing an open time are merged into one trade before the streak is measured. |
+| M4 fade TP lost on ECN fallback | **Fixed.** The intended target is carried through the fallback. |
+| M5 cap limits attempts | **Left as designed.** Consequence of your exit rules. |
+| M6 benign modify counted as failure | **Fixed.** A "no changes" result no longer counts toward the stop-repair limit. |
+| L1 dead `reference` parameter | **Removed.** |
