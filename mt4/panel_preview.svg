@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="470" height="526" viewBox="0 0 470 526">
+  <!-- Pixel-accurate preview of the GoldScalper v2 panel: same geometry
+       (430x486 at 10,14), same palette, same row baselines as the EA. -->
+  <rect width="470" height="526" fill="#2b2b2b"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <!-- opaque background + border -->
+    <rect x="10" y="14" width="430" height="486" fill="#0d1017" stroke="#37404f" stroke-width="1"/>
+
+    <!-- header -->
+    <text x="26" y="35" fill="#ffda00" font-size="17" font-weight="bold">XVISION  |  GOLD SCALPER M1/M5 V2</text>
+    <text x="26" y="53" fill="#8097be" font-size="12">M1 TRIGGER  |  M5 CONTEXT  |  ONE TRADE</text>
+    <rect x="26" y="58" width="394" height="1" fill="#414d60"/>
+
+    <!-- STATUS -->
+    <text x="26" y="75" fill="#37a9ff" font-size="12">STATUS</text>
+    <rect x="26" y="78" width="394" height="1" fill="#414d60"/>
+    <text x="26" y="99" fill="#e1e6f0" font-size="14.5">SCANNING FOR A QUALIFIED BURST</text>
+    <text x="26" y="118" fill="#aeb8c9" font-size="12">Signal / module</text>
+    <text x="424" y="118" fill="#e1e6f0" font-size="12" text-anchor="end">NONE</text>
+    <text x="26" y="135" fill="#aeb8c9" font-size="12">Blocked by</text>
+    <text x="424" y="135" fill="#ffa820" font-size="12" text-anchor="end">shock/exhaust 0.48</text>
+    <text x="26" y="152" fill="#aeb8c9" font-size="12">Position</text>
+    <text x="424" y="152" fill="#8097be" font-size="12" text-anchor="end">NONE</text>
+
+    <!-- TRADE MANAGEMENT -->
+    <text x="26" y="171" fill="#37a9ff" font-size="12">TRADE MANAGEMENT</text>
+    <rect x="26" y="174" width="394" height="1" fill="#414d60"/>
+    <text x="26" y="192" fill="#aeb8c9" font-size="12">Requested / executable lot</text>
+    <text x="424" y="192" fill="#e1e6f0" font-size="12" text-anchor="end">0.01 / 0.01</text>
+    <text x="26" y="209" fill="#aeb8c9" font-size="12">Stop loss / take profit</text>
+    <text x="424" y="209" fill="#e1e6f0" font-size="12" text-anchor="end">$2.50 / off</text>
+    <text x="26" y="226" fill="#aeb8c9" font-size="12">Lock trigger / locked profit</text>
+    <text x="424" y="226" fill="#00e660" font-size="12" text-anchor="end">$0.60 / $0.10</text>
+    <text x="26" y="243" fill="#aeb8c9" font-size="12">Trailing start / distance</text>
+    <text x="424" y="243" fill="#00e660" font-size="12" text-anchor="end">$0.90 / $0.60</text>
+    <text x="26" y="260" fill="#aeb8c9" font-size="12">Fast cut / launch window</text>
+    <text x="424" y="260" fill="#e1e6f0" font-size="12" text-anchor="end">$0.80 / +$0.30 in 90s</text>
+    <text x="26" y="277" fill="#aeb8c9" font-size="12">Exit ownership</text>
+    <text x="424" y="277" fill="#e1e6f0" font-size="12" text-anchor="end">EA scratch + EA SL</text>
+
+    <!-- ENGINE -->
+    <text x="26" y="296" fill="#37a9ff" font-size="12">ENGINE</text>
+    <rect x="26" y="299" width="394" height="1" fill="#414d60"/>
+    <text x="26" y="317" fill="#aeb8c9" font-size="12">Regime  N / D / I / X / S</text>
+    <text x="424" y="317" fill="#ffa820" font-size="12" text-anchor="end">0.28  0.06  0.17  0.43  0.06</text>
+    <text x="26" y="334" fill="#aeb8c9" font-size="12">Efficiency ratio / CUSUM up / dn</text>
+    <text x="424" y="334" fill="#e1e6f0" font-size="12" text-anchor="end">-0.11  /  3.0  /  0.0</text>
+    <text x="26" y="351" fill="#aeb8c9" font-size="12">ATR M1 / M5 / expansion</text>
+    <text x="424" y="351" fill="#e1e6f0" font-size="12" text-anchor="end">0.59 / 6.62 / 0.72x</text>
+
+    <!-- LIVE -->
+    <text x="26" y="370" fill="#37a9ff" font-size="12">LIVE</text>
+    <rect x="26" y="373" width="394" height="1" fill="#414d60"/>
+    <text x="26" y="391" fill="#aeb8c9" font-size="12">Broker time</text>
+    <text x="424" y="391" fill="#ffa820" font-size="12" text-anchor="end">2026.08.13 18:27:41</text>
+    <text x="26" y="408" fill="#aeb8c9" font-size="12">Live Bid / Ask</text>
+    <text x="424" y="408" fill="#e1e6f0" font-size="12" text-anchor="end">4373.21 / 4373.36</text>
+    <text x="26" y="425" fill="#aeb8c9" font-size="12">Spread / trading permission</text>
+    <text x="424" y="425" fill="#00e660" font-size="12" text-anchor="end">0.15 (max 0.35) / ENABLED</text>
+    <text x="26" y="442" fill="#aeb8c9" font-size="12">Session / blackout / Friday</text>
+    <text x="424" y="442" fill="#00e660" font-size="12" text-anchor="end">OPEN / clear / ok</text>
+
+    <!-- footer -->
+    <rect x="26" y="452" width="394" height="1" fill="#414d60"/>
+    <text x="26" y="470" fill="#e1e6f0" font-size="12">TODAY   trades 0/15   PnL +0.00   streak 0/3   brake -32</text>
+    <text x="26" y="490" fill="#8097be" font-size="11">LAST: attached</text>
+  </g>
+</svg>

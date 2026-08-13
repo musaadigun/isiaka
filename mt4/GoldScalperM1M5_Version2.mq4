@@ -108,8 +108,49 @@ const bool   PUSH_ALERTS           = false;
 #define GS_CLOSE_RETRY_ATTEMPTS      3
 #define GS_STOP_REPAIR_LIMIT         5
 #define GS_MAX_WINDOWS               8
-#define GS_PANEL_ROWS                13
-#define GS_OBJ_PREFIX                "GS_row"
+#define GS_PANEL_PREFIX              "GSP_"
+
+// ------------------------ panel geometry / palette ------------------
+const int   PANEL_LEFT     = 10;
+const int   PANEL_TOP      = 14;
+const int   PANEL_WIDTH    = 430;
+const int   PANEL_HEIGHT   = 486;
+const int   PANEL_LABEL_X  = 26;
+const int   PANEL_VALUE_X  = 424;   // PANEL_LEFT + PANEL_WIDTH - 16
+const color PANEL_BG       = C'13,16,23';
+const color PANEL_BORDER   = C'55,64,80';
+const color PANEL_DIVIDER  = C'65,77,96';
+const color PANEL_TITLE    = C'255,218,0';
+const color PANEL_SECTION  = C'55,169,255';
+const color PANEL_LABEL    = C'174,184,201';
+const color PANEL_VALUE    = C'225,230,240';
+const color PANEL_MUTED    = C'128,151,190';
+const color PANEL_GREEN    = C'0,230,96';
+const color PANEL_AMBER    = C'255,168,32';
+const color PANEL_RED      = C'255,80,80';
+const color PANEL_MAGENTA  = C'255,0,220';
+
+// Row baselines shared by CreatePanel and UpdatePanel so a value can
+// never be drawn at a different height from its label.
+const int ROW_STATUS = 85;
+const int ROW_SIG    = 107;
+const int ROW_BLK    = 124;
+const int ROW_POS    = 141;
+const int ROW_LOT    = 181;
+const int ROW_STP    = 198;
+const int ROW_LCK    = 215;
+const int ROW_TRL    = 232;
+const int ROW_SCR    = 249;
+const int ROW_OWN    = 266;
+const int ROW_REG    = 306;
+const int ROW_CUS    = 323;
+const int ROW_ATR    = 340;
+const int ROW_TIM    = 380;
+const int ROW_PRC    = 397;
+const int ROW_SPR    = 414;
+const int ROW_SES    = 431;
+const int ROW_TODAY  = 459;
+const int ROW_FOOTER = 479;
 
 // ------------------------ regime / signal state ---------------------
 double   g_cusumUp=0.0, g_cusumDown=0.0;
@@ -1073,82 +1114,237 @@ bool EntryAllowed(const int dir,string &blocker)
 }
 
 //+------------------------------------------------------------------+
-//| panel                                                             |
+//| panel: opaque sectioned status board                              |
 //+------------------------------------------------------------------+
-void PanelRow(const int row,const string text,const color clr)
+void PanelBox(const string suffix,const int x,const int y,const int width,
+              const int height,const color background,const color border,
+              const int zOrder=0)
 {
-   string name=GS_OBJ_PREFIX+IntegerToString(row);
+   string name=GS_PANEL_PREFIX+suffix;
    if(ObjectFind(0,name)<0)
-   {
+      ObjectCreate(0,name,OBJ_RECTANGLE_LABEL,0,0,0);
+   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_XSIZE,width);
+   ObjectSetInteger(0,name,OBJPROP_YSIZE,height);
+   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,background);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,border);
+   ObjectSetInteger(0,name,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+   ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_BACK,false);   // false = painted over the candles: opaque
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   ObjectSetInteger(0,name,OBJPROP_ZORDER,zOrder);
+}
+
+void PanelText(const string suffix,const string text,const int x,const int y,
+               const color textColor,const int fontSize=9,
+               const int anchor=ANCHOR_LEFT_UPPER,const string fontName="Arial")
+{
+   string name=GS_PANEL_PREFIX+suffix;
+   if(ObjectFind(0,name)<0)
       ObjectCreate(0,name,OBJ_LABEL,0,0,0);
-      ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
-      ObjectSetInteger(0,name,OBJPROP_XDISTANCE,8);
-      ObjectSetInteger(0,name,OBJPROP_YDISTANCE,16+row*15);
-      ObjectSetInteger(0,name,OBJPROP_FONTSIZE,9);
-   }
+   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,name,OBJPROP_ANCHOR,anchor);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,fontSize);
+   ObjectSetString(0,name,OBJPROP_FONT,fontName);
    ObjectSetString(0,name,OBJPROP_TEXT,text);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   ObjectSetInteger(0,name,OBJPROP_ZORDER,1);
+}
+
+void PanelDivider(const string suffix,const int y)
+{
+   PanelBox(suffix,PANEL_LABEL_X,y,PANEL_WIDTH-36,1,PANEL_DIVIDER,PANEL_DIVIDER,1);
+}
+
+void PanelSection(const string suffix,const string title,const int titleY,const int lineY)
+{
+   PanelText(suffix+"Title",title,PANEL_LABEL_X,titleY,PANEL_SECTION,9);
+   PanelDivider(suffix+"Line",lineY);
+}
+
+void PanelPair(const string suffix,const string label,const int y)
+{
+   PanelText(suffix+"L",label,PANEL_LABEL_X,y,PANEL_LABEL,9);
+   PanelText(suffix+"V","--",PANEL_VALUE_X,y,PANEL_VALUE,9,ANCHOR_RIGHT_UPPER);
+}
+
+void PanelValue(const string suffix,const int y,const string text,const color clr)
+{
+   PanelText(suffix+"V",text,PANEL_VALUE_X,y,clr,9,ANCHOR_RIGHT_UPPER);
+}
+
+// Right-anchored values overrun the label if they get long; keep them
+// inside thepanel by trimming with a visible ellipsis.
+string PanelFit(const string s,const int maxChars)
+{
+   if(StringLen(s)<=maxChars) return(s);
+   return(StringSubstr(s,0,maxChars-1)+"~");
+}
+
+string PanelPrice(const double v)
+{
+   return(v>0.0 ? "$"+DoubleToString(v,2) : "off");
+}
+
+void CreatePanel()
+{
+   if(!SHOW_PANEL) return;
+   Comment("");
+   PanelBox("BG",PANEL_LEFT,PANEL_TOP,PANEL_WIDTH,PANEL_HEIGHT,
+            PANEL_BG,PANEL_BORDER,0);
+   PanelText("Title","XVISION  |  GOLD SCALPER M1/M5 V2",PANEL_LABEL_X,22,
+             PANEL_TITLE,13);
+   PanelText("Subtitle","M1 TRIGGER  |  M5 CONTEXT  |  ONE TRADE",PANEL_LABEL_X,42,
+             PANEL_MUTED,9);
+   PanelDivider("HeaderLine",58);
+
+   PanelSection("St","STATUS",64,78);
+   PanelText("StatusMessage","INITIALISING",PANEL_LABEL_X,ROW_STATUS,PANEL_VALUE,11);
+   PanelPair("Sig","Signal / module",ROW_SIG);
+   PanelPair("Blk","Blocked by",ROW_BLK);
+   PanelPair("Pos","Position",ROW_POS);
+
+   PanelSection("Mg","TRADE MANAGEMENT",160,174);
+   PanelPair("Lot","Requested / executable lot",ROW_LOT);
+   PanelPair("Stp","Stop loss / take profit",ROW_STP);
+   PanelPair("Lck","Lock trigger / locked profit",ROW_LCK);
+   PanelPair("Trl","Trailing start / distance",ROW_TRL);
+   PanelPair("Scr","Fast cut / launch window",ROW_SCR);
+   PanelPair("Own","Exit ownership",ROW_OWN);
+
+   PanelSection("En","ENGINE",285,299);
+   PanelPair("Reg","Regime  N / D / I / X / S",ROW_REG);
+   PanelPair("Cus","Efficiency ratio / CUSUM up / dn",ROW_CUS);
+   PanelPair("Atr","ATR M1 / M5 / expansion",ROW_ATR);
+
+   PanelSection("Lv","LIVE",359,373);
+   PanelPair("Tim","Broker time",ROW_TIM);
+   PanelPair("Prc","Live Bid / Ask",ROW_PRC);
+   PanelPair("Spr","Spread / trading permission",ROW_SPR);
+   PanelPair("Ses","Session / blackout / Friday",ROW_SES);
+
+   PanelDivider("FooterLine",452);
+   PanelText("Today","--",PANEL_LABEL_X,ROW_TODAY,PANEL_VALUE,9);
+   PanelText("Footer","ONE POSITION  |  SCRATCH-FIRST EXITS  |  DAILY BRAKE ARMED",
+             PANEL_LABEL_X,ROW_FOOTER,PANEL_MUTED,8);
+}
+
+void DeletePanel()
+{
+   ObjectsDeleteAll(0,GS_PANEL_PREFIX);
+   g_lastPanelMs=0;
 }
 
 void UpdatePanel(const bool force=false)
 {
    if(!SHOW_PANEL) return;
    uint nowMs=GetTickCount();
-   if(!force && nowMs-g_lastPanelMs<300) return;   // gold ticks fast; don't redraw 13 labels per tick
+   if(!force && nowMs-g_lastPanelMs<300) return;   // gold ticks fast; don't repaint every tick
    g_lastPanelMs=nowMs;
+   if(ObjectFind(0,GS_PANEL_PREFIX+"BG")<0) CreatePanel();
+
    RefreshRates();
    RefreshDayCache();
    double lossLimit=DailyLossLimit();
    bool armed=(IsTesting() || IsTradeAllowed());
-
-   PanelRow(0,"GoldScalper M1/M5 v2  "+Symbol(),clrWhite);
-   PanelRow(1,armed ? "ARMED - AutoTrading ON" :
-              "STANDBY - AutoTrading OFF (signals only)",
-              armed ? clrLimeGreen : clrOrange);
-   PanelRow(2,StringFormat("Regime  N %.2f  D %.2f  I %.2f  X %.2f  S %.2f",
-            g_modeNoise,g_modeDrift,g_modeImpulse,g_modeExhaustion,g_modeShock),clrSilver);
-   PanelRow(3,StringFormat("ER %.2f   CUSUM up %.1f / dn %.1f   exp %.2f",
-            g_er,g_cusumUp,g_cusumDown,g_expansion),clrSilver);
-   PanelRow(4,StringFormat("Spread %.2f (max %.2f)   ATR M1 %.2f  M5 %.2f",
-            Ask-Bid,MAX_SPREAD_USD,g_atrM1,g_atrM5),
-            (MAX_SPREAD_USD>0.0 && Ask-Bid>MAX_SPREAD_USD) ? clrOrange : clrSilver);
-   PanelRow(5,StringFormat("Session %s   blackout %s   Friday %s",
-            SessionOK(TimeCurrent())?"OPEN":"closed",
-            BlackoutActive(TimeCurrent())?"ACTIVE":"clear",
-            LateFridayBlocked(TimeCurrent())?"BLOCKED":"ok"),clrSilver);
-   PanelRow(6,StringFormat("Today  trades %d/%s   closed PnL %.2f%s",
-            g_tradesToday,
-            MAX_TRADES_PER_DAY>0?IntegerToString(MAX_TRADES_PER_DAY):"-",
-            g_closedPnLToday,
-            lossLimit>0.0?StringFormat("  (brake -%.0f)",lossLimit):""),
-            (lossLimit>0.0 && g_closedPnLToday<=-lossLimit) ? clrOrange : clrSilver);
-   PanelRow(7,StringFormat("Loss streak %d/%s",g_consecLosses,
-            MAX_CONSEC_LOSSES>0?IntegerToString(MAX_CONSEC_LOSSES):"-"),
-            (MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES)?clrOrange:clrSilver);
-
    int ticket=FindManagedTicket();
-   if(ticket>=0 && OrderSelect(ticket,SELECT_BY_TICKET))
-      PanelRow(8,StringFormat("POSITION %s %.2f lot  move %.2f  maxFav %.2f  %s",
-               OrderType()==OP_BUY?"BUY":"SELL",OrderLots(),
-               ProfitMovementSelected(),g_posMaxFav,
-               g_posLaunched?"launched":"confirm window"),
-               OrderType()==OP_BUY?clrDodgerBlue:clrTomato);
-   else
-      PanelRow(8,"POSITION none",clrGray);
+   bool havePos=(ticket>=0 && OrderSelect(ticket,SELECT_BY_TICKET));
+   bool brakeHit=(lossLimit>0.0 && g_closedPnLToday<=-lossLimit);
+   bool streakHit=(MAX_CONSEC_LOSSES>0 && g_consecLosses>=MAX_CONSEC_LOSSES);
 
-   PanelRow(9,StringFormat("Signal  %s%s",
-            g_signalDir>0?"BUY":(g_signalDir<0?"SELL":"none"),
-            g_signalDir!=0?(g_signalModule==2?" (fade)":" (momentum)"):""),
-            g_signalDir>0?clrDodgerBlue:(g_signalDir<0?clrTomato:clrGray));
-   PanelRow(10,(StringLen(g_blocker)==0 ? "Status: watching" : "Blocked by: "+g_blocker),
-            StringLen(g_blocker)==0?clrLimeGreen:clrOrange);
-   PanelRow(11,"Last: "+g_lastAction,clrSilver);
-   PanelRow(12,StringFormat("SL %.2f  TP %s  lock %.2f@%.2f  trail %.2f@%.2f  scratch %.2f/%.2f-%ds",
-            StopLoss_PriceUSD,
-            TakeProfit_PriceUSD>0.0?DoubleToString(TakeProfit_PriceUSD,2):"off",
-            LockedProfit_PriceUSD,LockTrigger_PriceUSD,
-            TrailingDistance_PriceUSD,TrailingStart_PriceUSD,
-            SCRATCH_ADVERSE_USD,LAUNCH_PROGRESS_USD,LAUNCH_WINDOW_SECONDS),clrGray);
+   //--- headline state
+   string state; color stateClr;
+   if(!armed)                      { state="STANDBY - AUTOTRADING IS OFF";   stateClr=PANEL_AMBER; }
+   else if(havePos)                { state="MANAGING LIVE POSITION";         stateClr=PANEL_GREEN; }
+   else if(brakeHit)               { state="DAILY LOSS BRAKE - STOOD DOWN";  stateClr=PANEL_RED;   }
+   else if(streakHit)              { state="LOSS STREAK - PAUSED";           stateClr=PANEL_RED;   }
+   else if(!SessionOK(TimeCurrent())) { state="OUTSIDE SESSION WINDOW";      stateClr=PANEL_MUTED; }
+   else if(BlackoutActive(TimeCurrent())) { state="NEWS BLACKOUT";           stateClr=PANEL_AMBER; }
+   else if(g_signalDir!=0)         { state="QUALIFIED SIGNAL";               stateClr=PANEL_GREEN; }
+   else                            { state="SCANNING FOR A QUALIFIED BURST"; stateClr=PANEL_VALUE; }
+   PanelText("StatusMessage",state,PANEL_LABEL_X,ROW_STATUS,stateClr,11);
+
+   //--- status block
+   string sigTxt="NONE";
+   color  sigClr=PANEL_VALUE;
+   if(g_signalDir>0) { sigTxt="BUY";  sigClr=PANEL_GREEN; }
+   if(g_signalDir<0) { sigTxt="SELL"; sigClr=PANEL_MAGENTA; }
+   if(g_signalDir!=0) sigTxt=sigTxt+(g_signalModule==2?"  (FADE)":"  (MOMENTUM)");
+   PanelValue("Sig",ROW_SIG,sigTxt,sigClr);
+
+   PanelValue("Blk",ROW_BLK,StringLen(g_blocker)==0 ? "clear" : PanelFit(g_blocker,34),
+              StringLen(g_blocker)==0 ? PANEL_GREEN : PANEL_AMBER);
+
+   if(havePos)
+   {
+      double move=ProfitMovementSelected();
+      PanelValue("Pos",ROW_POS,StringFormat("%s %.2f @ %s   %+.2f",
+                 OrderType()==OP_BUY?"BUY":"SELL",OrderLots(),
+                 DoubleToString(OrderOpenPrice(),Digits),move),
+                 move>=0.0?PANEL_GREEN:PANEL_RED);
+   }
+   else
+      PanelValue("Pos",ROW_POS,"NONE",PANEL_MUTED);
+
+   //--- trade management (mirrors the Inputs tab)
+   double executable=NormaliseLots(LotSize);
+   PanelValue("Lot",ROW_LOT,StringFormat("%.2f / %.2f",LotSize,executable),
+              executable>0.0?PANEL_VALUE:PANEL_RED);
+   PanelValue("Stp",ROW_STP,PanelPrice(StopLoss_PriceUSD)+" / "+PanelPrice(TakeProfit_PriceUSD),
+              PANEL_VALUE);
+   PanelValue("Lck",ROW_LCK,PanelPrice(LockTrigger_PriceUSD)+" / "+PanelPrice(LockedProfit_PriceUSD),
+              LockTrigger_PriceUSD>0.0?PANEL_GREEN:PANEL_MUTED);
+   PanelValue("Trl",ROW_TRL,PanelPrice(TrailingStart_PriceUSD)+" / "+PanelPrice(TrailingDistance_PriceUSD),
+              (TrailingStart_PriceUSD>0.0&&TrailingDistance_PriceUSD>0.0)?PANEL_GREEN:PANEL_MUTED);
+   PanelValue("Scr",ROW_SCR,StringFormat("$%.2f / +$%.2f in %ds",
+              SCRATCH_ADVERSE_USD,LAUNCH_PROGRESS_USD,LAUNCH_WINDOW_SECONDS),PANEL_VALUE);
+   string ownership="EA scratch";
+   if(StopLoss_PriceUSD>0.0)   ownership=ownership+" + EA SL";
+   if(TakeProfit_PriceUSD>0.0) ownership=ownership+" + EA TP";
+   PanelValue("Own",ROW_OWN,ownership,PANEL_VALUE);
+
+   //--- engine
+   PanelValue("Reg",ROW_REG,StringFormat("%.2f  %.2f  %.2f  %.2f  %.2f",
+              g_modeNoise,g_modeDrift,g_modeImpulse,g_modeExhaustion,g_modeShock),
+              (g_modeShock+g_modeExhaustion>MAX_SHOCK_EXHAUST)?PANEL_AMBER:PANEL_VALUE);
+   PanelValue("Cus",ROW_CUS,StringFormat("%+.2f  /  %.1f  /  %.1f",g_er,g_cusumUp,g_cusumDown),
+              (MathAbs(g_er)>=MOMENTUM_MIN_ER)?PANEL_GREEN:PANEL_VALUE);
+   PanelValue("Atr",ROW_ATR,StringFormat("%.2f / %.2f / %.2fx",g_atrM1,g_atrM5,g_expansion),PANEL_VALUE);
+
+   //--- live
+   PanelValue("Tim",ROW_TIM,TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),PANEL_AMBER);
+   PanelValue("Prc",ROW_PRC,DoubleToString(Bid,Digits)+" / "+DoubleToString(Ask,Digits),PANEL_VALUE);
+   double spread=Ask-Bid;
+   bool spreadOK=(MAX_SPREAD_USD<=0.0 || spread<=MAX_SPREAD_USD);
+   PanelValue("Spr",ROW_SPR,StringFormat("%.2f (max %.2f) / %s",spread,MAX_SPREAD_USD,
+              armed?"ENABLED":"DISABLED"),
+              (spreadOK&&armed)?PANEL_GREEN:PANEL_AMBER);
+   PanelValue("Ses",ROW_SES,StringFormat("%s / %s / %s",
+              SessionOK(TimeCurrent())?"OPEN":"CLOSED",
+              BlackoutActive(TimeCurrent())?"ACTIVE":"clear",
+              LateFridayBlocked(TimeCurrent())?"BLOCKED":"ok"),
+              SessionOK(TimeCurrent())?PANEL_GREEN:PANEL_MUTED);
+
+   //--- today
+   string today=StringFormat("TODAY   trades %d/%s   PnL %+.2f   streak %d/%s%s",
+      g_tradesToday,MAX_TRADES_PER_DAY>0?IntegerToString(MAX_TRADES_PER_DAY):"unc",
+      g_closedPnLToday,g_consecLosses,
+      MAX_CONSEC_LOSSES>0?IntegerToString(MAX_CONSEC_LOSSES):"-",
+      lossLimit>0.0?StringFormat("   brake -%.0f",lossLimit):"");
+   PanelText("Today",today,PANEL_LABEL_X,ROW_TODAY,
+             (brakeHit||streakHit)?PANEL_RED:(g_closedPnLToday>0.0?PANEL_GREEN:PANEL_VALUE),9);
+   PanelText("Footer",PanelFit("LAST: "+g_lastAction,62),PANEL_LABEL_X,ROW_FOOTER,PANEL_MUTED,8);
 }
 
 //+------------------------------------------------------------------+
@@ -1249,6 +1445,7 @@ int OnInit()
    EventSetTimer(1);
    g_blocker="waiting for M1/M5 history";
    g_lastAction="attached";
+   CreatePanel();
    UpdatePanel(true);
    return(INIT_SUCCEEDED);
 }
@@ -1256,7 +1453,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   for(int r=0;r<GS_PANEL_ROWS;r++) ObjectDelete(0,GS_OBJ_PREFIX+IntegerToString(r));
+   DeletePanel();
 }
 
 void OnTick()
