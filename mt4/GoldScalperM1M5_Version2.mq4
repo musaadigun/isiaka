@@ -1231,7 +1231,7 @@ void CreatePanel()
    PanelSection("Lv","LIVE",359,373);
    PanelPair("Tim","Broker time",ROW_TIM);
    PanelPair("Prc","Live Bid / Ask",ROW_PRC);
-   PanelPair("Spr","Spread / trading permission",ROW_SPR);
+   PanelPair("Spr","Spread / permission",ROW_SPR);
    PanelPair("Ses","Session / blackout / Friday",ROW_SES);
 
    PanelDivider("FooterLine",452);
