@@ -22,8 +22,11 @@
 //| signal and every blocker on the panel first. Arm it deliberately.  |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.00"
+#property version   "1.01"
 #property description "M1/M5 gold scalper: CUSUM burst entries, regime-routed, scratch-first exits."
+// v1.01 audit fixes: daily-cap ticket double-count on partial closes,
+// partial-remainder state recovery, manual-position guard, fast-cut
+// spread-blip debounce, panel throttle, orphaned-globals sweep.
 
 enum GSLotMode
 {
@@ -62,6 +65,7 @@ input bool      ExitOnOppositeSignal     = true;
 input double    MaxSpreadUSD             = 0.35;
 input double    MaxChaseUSD              = 0.30;     // max distance from signal close at fire time
 input int       CooldownSeconds          = 120;
+input bool      BlockIfManualPosition    = true;     // stand aside while any non-EA position is open on this symbol
 input int       MaxTradesPerDay          = 15;       // 0 disables
 input double    MaxDailyLossPercent      = 1.5;      // of day-start balance; 0 disables
 input double    MaxDailyLossUSD          = 0.0;      // absolute cap; stricter of the two applies
@@ -149,7 +153,9 @@ bool     g_pendingClose=false;
 string   g_pendingCloseReason="";
 int      g_stopRepairTicket=-1;
 int      g_stopRepairFailures=0;
+int      g_adverseHits=0;
 datetime g_lastEntryTime=0;
+uint     g_lastPanelMs=0;
 
 // ------------------------ day cache ---------------------------------
 datetime g_dayStart=0;
@@ -567,7 +573,8 @@ void RefreshDayCache()
    datetime closeTimes[200];
    double   profits[200];
    int      n=0;
-   int trades=0;
+   datetime opens[400];
+   int      oc=0;
    double pnl=0.0;
 
    for(int h=OrdersHistoryTotal()-1;h>=0;h--)
@@ -575,7 +582,7 @@ void RefreshDayCache()
       if(!OrderSelect(h,SELECT_BY_POS,MODE_HISTORY)) continue;
       if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
-      if(OrderOpenTime()>=start) trades++;
+      if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
       if(OrderCloseTime()>=start && n<200)
       {
          double p=OrderProfit()+OrderSwap()+OrderCommission();
@@ -590,7 +597,19 @@ void RefreshDayCache()
       if(!OrderSelect(t,SELECT_BY_POS,MODE_TRADES)) continue;
       if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber) continue;
       if(OrderType()!=OP_BUY && OrderType()!=OP_SELL) continue;
-      if(OrderOpenTime()>=start) trades++;
+      if(OrderOpenTime()>=start && oc<400) opens[oc++]=OrderOpenTime();
+   }
+
+   // A partial close splits one entry into several tickets that share
+   // an open time. Count unique open times, not tickets, or the daily
+   // trade cap fills at roughly half the intended entry count.
+   int trades=0;
+   if(oc>0)
+   {
+      ArraySort(opens,oc,0,MODE_ASCEND);
+      trades=1;
+      for(int u=1;u<oc;u++)
+         if(opens[u]!=opens[u-1]) trades++;
    }
 
    // sort today's closed trades by close time (insertion sort, n is small)
@@ -716,10 +735,17 @@ void DropTicketState(const int ticket)
 void AdoptTicket(const int ticket)
 {
    g_posTicket=ticket;
+   g_adverseHits=0;
    g_posMaxFav=MathMax(0.0,ProfitMovementSelected());
    g_posLaunched=(g_posMaxFav>=LaunchProgressUSD);
    g_posPartialDone=false;
    g_posInitialLots=OrderLots();
+   // partial-close remainders carry a broker comment ("from #...",
+   // "partial..."): never bank a second partial out of a remainder,
+   // even if the per-ticket state was lost to a crash or ticket swap
+   string cmt=OrderComment();
+   if(StringFind(cmt,"from #")>=0 || StringFind(cmt,"partial")>=0)
+      g_posPartialDone=true;
    if(!IsTesting())
    {
       if(GlobalVariableCheck(TicketKey(ticket,"MF")))
@@ -738,6 +764,7 @@ void ForgetPosition()
 {
    DropTicketState(g_posTicket);
    g_posTicket=-1;
+   g_adverseHits=0;
    g_posLaunched=false;
    g_posPartialDone=false;
    g_posMaxFav=0.0;
@@ -812,7 +839,8 @@ bool SendEntry(const int dir,const int module,const double reference,const doubl
 {
    RefreshRates();
    double ask=Ask, bid=Bid;
-   if(ask<=0.0 || bid<=0.0) { g_lastAction="ENTRY BLOCKED: NO QUOTE"; return(false); }
+   if(ask<=0.0 || bid<=0.0 || ask<bid)
+      { g_lastAction="ENTRY BLOCKED: NO QUOTE"; return(false); }
    double spread=ask-bid;
    if(MaxSpreadUSD>0.0 && spread>MaxSpreadUSD)
       { g_lastAction="ENTRY BLOCKED: SPREAD"; return(false); }
@@ -976,8 +1004,12 @@ void ProcessPartialBank()
          g_posTicket=newTicket;
       }
       PersistTicketState(g_posTicket);
+      double tickValue=MarketInfo(Symbol(),MODE_TICKVALUE);
+      double tickSize=MarketInfo(Symbol(),MODE_TICKSIZE);
+      double moved=(type==OP_BUY ? price-OrderOpenPrice() : OrderOpenPrice()-price);
+      double est=(tickSize>0.0 ? moved/tickSize*tickValue*closeLots : 0.0);
       g_lastAction=StringFormat("PARTIAL BANKED %.2f LOT",closeLots);
-      LedgerWrite("PARTIAL",(type==OP_BUY?1:-1),closeLots,price,0.0,"partial bank");
+      LedgerWrite("PARTIAL",(type==OP_BUY?1:-1),closeLots,price,est,"partial bank");
    }
    else
       Print("GoldScalper: partial close failed, error ",GetLastError());
@@ -1056,9 +1088,16 @@ void ManagePosition()
          g_posMaxFav=movement;
    }
 
-   // 1. fast cut: the working loss limit, far inside the broker stop
+   // 1. fast cut: the working loss limit, far inside the broker stop.
+   //    Movement is measured close-side, so a one-tick spread spike can
+   //    breach it; require two consecutive breaches before cutting.
    if(ScratchAdverseUSD>0.0 && movement<=-ScratchAdverseUSD)
-      { CloseSelectedOrder("FAST CUT"); return; }
+   {
+      g_adverseHits++;
+      if(g_adverseHits>=2) { CloseSelectedOrder("FAST CUT"); return; }
+   }
+   else
+      g_adverseHits=0;
 
    // 2. confirm-or-scratch: no launch inside the window = dead trade
    if(LaunchWindowSeconds>0 && !g_posLaunched &&
@@ -1085,6 +1124,16 @@ bool EntryAllowed(const int dir,string &blocker)
    if(dir<0 && !AllowShorts) { blocker="shorts disabled"; return(false); }
    if(!IsTesting() && !IsTradeAllowed()) { blocker="autotrading off"; return(false); }
    if(FindManagedTicket()>=0) { blocker="position open"; return(false); }
+   if(BlockIfManualPosition)
+   {
+      for(int i=OrdersTotal()-1;i>=0;i--)
+      {
+         if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
+         if(OrderSymbol()!=Symbol() || OrderMagicNumber()==MagicNumber) continue;
+         if(OrderType()==OP_BUY || OrderType()==OP_SELL)
+            { blocker="manual/other position on symbol"; return(false); }
+      }
+   }
 
    datetime now=TimeCurrent();
    if(!SessionOK(now)) { blocker="outside session"; return(false); }
@@ -1127,9 +1176,12 @@ void PanelRow(const int row,const string text,const color clr)
    ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
 }
 
-void UpdatePanel()
+void UpdatePanel(const bool force=false)
 {
    if(!ShowPanel) return;
+   uint nowMs=GetTickCount();
+   if(!force && nowMs-g_lastPanelMs<300) return;   // gold ticks fast; don't redraw 13 labels per tick
+   g_lastPanelMs=nowMs;
    RefreshRates();
    RefreshDayCache();
    double lossLimit=DailyLossLimit();
@@ -1181,6 +1233,27 @@ void UpdatePanel()
             TrailATRMult,TrailStartUSD,MaxHoldMinutes),clrGray);
 }
 
+// Sweep per-ticket GlobalVariables left behind by tickets that no
+// longer exist or are already closed (EA removed mid-trade, manual
+// closes). Runs once at init; the adopted open ticket survives.
+void CleanOrphanedTicketState()
+{
+   if(IsTesting()) return;
+   string prefix=StringFormat("GS1.%d.%d.",AccountNumber(),MagicNumber);
+   for(int i=GlobalVariablesTotal()-1;i>=0;i--)
+   {
+      string name=GlobalVariableName(i);
+      if(StringFind(name,prefix)!=0) continue;
+      string rest=StringSubstr(name,StringLen(prefix));
+      int dot=StringFind(rest,".");
+      if(dot<0) { GlobalVariableDel(name); continue; }
+      int ticket=(int)StringToInteger(StringSubstr(rest,0,dot));
+      if(ticket<=0) { GlobalVariableDel(name); continue; }
+      if(!OrderSelect(ticket,SELECT_BY_TICKET) || OrderCloseTime()>0)
+         GlobalVariableDel(name);
+   }
+}
+
 //+------------------------------------------------------------------+
 //| lifecycle                                                         |
 //+------------------------------------------------------------------+
@@ -1225,9 +1298,11 @@ int OnInit()
       AdoptTicket(ticket);
       Print("GoldScalper: adopted open ticket ",ticket," after restart.");
    }
+   CleanOrphanedTicketState();
    EventSetTimer(1);
+   g_blocker="waiting for M1/M5 history";
    g_lastAction=EnableTrading ? "armed" : "attached DISARMED - observe first";
-   UpdatePanel();
+   UpdatePanel(true);
    return(INIT_SUCCEEDED);
 }
 
@@ -1276,15 +1351,19 @@ void OnTick()
             if(EntryAllowed(dir,railBlocker))
             {
                LedgerWrite("SIGNAL",dir,0.0,g_signalRef,0.0,module==2?"fade":"momentum");
-               SendEntry(dir,module,g_signalRef,fadeTarget);
-               g_blocker="";
+               g_blocker=(SendEntry(dir,module,g_signalRef,fadeTarget) ? "" : g_lastAction);
             }
             else
                g_blocker=railBlocker;
          }
+         else if(UseMomentumModule && UseFadeModule)
+            g_blocker="mom: "+momBlocker+" | fade: "+fadeBlocker;
+         else if(UseMomentumModule)
+            g_blocker=momBlocker;
+         else if(UseFadeModule)
+            g_blocker=fadeBlocker;
          else
-            g_blocker=(UseMomentumModule ? momBlocker :
-                       (UseFadeModule ? fadeBlocker : "all modules off"));
+            g_blocker="all modules off";
       }
    }
    UpdatePanel();
@@ -1301,6 +1380,6 @@ void OnTimer()
       else
          { g_pendingClose=false; g_pendingCloseReason=""; }
    }
-   UpdatePanel();
+   UpdatePanel(true);
 }
 //+------------------------------------------------------------------+

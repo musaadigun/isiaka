@@ -248,6 +248,7 @@ class Position:
     partial_done: bool = False
     stop: float = 0.0
     realized: float = 0.0        # banked partial PnL
+    adverse_hits: int = 0        # fast-cut debounce (mirrors the EA)
 
 
 @dataclass
@@ -549,10 +550,15 @@ class Backtester:
             if pos.direction < 0 and ask <= pos.fade_target:
                 self.close_position(t_s, ask, "FADE TARGET")
                 return
-        # software fast cut
+        # software fast cut: two consecutive breaches, so a one-tick
+        # spread blip cannot scratch a healthy trade (mirrors the EA)
         if cfg.scratch_adverse_usd > 0 and move <= -cfg.scratch_adverse_usd:
-            self.close_position(t_s, exit_px, "FAST CUT")
-            return
+            pos.adverse_hits += 1
+            if pos.adverse_hits >= 2:
+                self.close_position(t_s, exit_px, "FAST CUT")
+                return
+        else:
+            pos.adverse_hits = 0
         # confirm-or-scratch
         if (cfg.launch_window_seconds > 0 and not pos.launched
                 and t_s - pos.entry_time >= cfg.launch_window_seconds):
