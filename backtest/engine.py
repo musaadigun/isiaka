@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 6).
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 7).
 
 Mirrors the EA's decision logic - same velocity composites, efficiency
 ratio, CUSUM burst detector, five-mode regime posterior - and the same
@@ -35,7 +35,7 @@ class Config:
     # sizing / stop
     risk_percent: float = 0.5            # used only when fixed_lots is 0
     hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
-    # Exit engine. Mirrors EA v6: the ONLY exits are the user's SL, TP,
+    # Exit engine. Mirrors EA v7: the ONLY exits are the user's SL, TP,
     # profit lock and trailing stop. The scratch mechanisms below were
     # removed from the EA and default to off; they remain here so the
     # effect of re-adding one can be measured before it is written back
@@ -65,7 +65,7 @@ class Config:
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
     use_session_filter: bool = False     # EA v3+: removed
     friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
-    # momentum module - mirrors EA v6 defaults (permissive; 0 = gate off)
+    # momentum module - mirrors EA v7 defaults (permissive; 0 = gate off)
     use_momentum: bool = True
     cusum_allowance: float = 0.18
     cusum_decay: float = 0.94
