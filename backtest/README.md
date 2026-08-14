@@ -1,6 +1,6 @@
 # Backtest harness
 
-Tick-replay validation for `mt4/GoldScalperM1M5_Version4.mq4`. The engine mirrors
+Tick-replay validation for `mt4/GoldScalperM1M5_Version5.mq4`. The engine mirrors
 the EA's decision logic function-for-function and replays it over real
 bid/ask ticks, so spread — the gold scalper's #1 opponent — is inside
 every number it prints. MT4's own strategy tester interpolates M1 ticks

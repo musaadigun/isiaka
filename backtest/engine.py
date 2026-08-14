@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 4).
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 5).
 
 Mirrors the EA's decision logic - same velocity composites, efficiency
 ratio, CUSUM burst detector, five-mode regime posterior - and the same
@@ -35,7 +35,7 @@ class Config:
     # sizing / stop
     risk_percent: float = 0.5            # used only when fixed_lots is 0
     hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
-    # Exit engine. Mirrors EA v4: the ONLY exits are the user's SL, TP,
+    # Exit engine. Mirrors EA v5: the ONLY exits are the user's SL, TP,
     # profit lock and trailing stop. The scratch mechanisms below were
     # removed from the EA and default to off; they remain here so the
     # effect of re-adding one can be measured before it is written back
@@ -65,17 +65,17 @@ class Config:
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
     use_session_filter: bool = False     # EA v3+: removed
     friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
-    # momentum module
+    # momentum module - mirrors EA v5 defaults (permissive; 0 = gate off)
     use_momentum: bool = True
     cusum_allowance: float = 0.18
     cusum_decay: float = 0.94
-    cusum_trigger: float = 3.0
-    cusum_fresh_bars: int = 3
-    min_m1_strength: float = 0.10
-    min_m1_coherence: float = 0.75
-    big_bar_max_atr: float = 2.0
-    max_maturity_m5_atr: float = 1.5
-    require_m5_alignment: bool = True
+    cusum_trigger: float = 2.0
+    cusum_fresh_bars: int = 5
+    min_m1_strength: float = 0.05
+    min_m1_coherence: float = 0.50
+    big_bar_max_atr: float = 0.0
+    max_maturity_m5_atr: float = 0.0
+    require_m5_alignment: bool = False
     # fade module (off by default: gold fades failed H4 stability tests)
     use_fade: bool = False
     fade_ma_period: int = 50
@@ -85,10 +85,10 @@ class Config:
     fade_max_expansion: float = 2.0
     # regime router
     er_period: int = 20
-    momentum_min_er: float = 0.30
-    min_impulse_drift: float = 0.35
+    momentum_min_er: float = 0.10
+    min_impulse_drift: float = 0.0
     min_fade_noise: float = 0.40
-    max_shock_exhaust: float = 0.45
+    max_shock_exhaust: float = 1.0
     # cost model
     commission_per_lot: float = 7.0        # round trip, account currency
     slippage_usd: float = 0.03             # applied to every fill
@@ -369,9 +369,9 @@ class Backtester:
         if not cfg.use_momentum:
             return 0
         noise, drift, impulse, exhaust, shock = self.modes
-        if shock + exhaust > cfg.max_shock_exhaust:
+        if cfg.max_shock_exhaust < 1.0 and shock + exhaust > cfg.max_shock_exhaust:
             return self.block("shock/exhaust")
-        if impulse + drift < cfg.min_impulse_drift:
+        if cfg.min_impulse_drift > 0 and impulse + drift < cfg.min_impulse_drift:
             return self.block("impulse+drift low")
 
         direction, cross = 0, None
@@ -384,25 +384,30 @@ class Backtester:
         if direction == 0:
             return self.block("no burst")
         bar = self.m1.closed(1)
-        if cross is None or bar[0] - cross > cfg.cusum_fresh_bars * 60:
+        if cross is None or (cfg.cusum_fresh_bars > 0
+                            and bar[0] - cross > cfg.cusum_fresh_bars * 60):
             return self.block("burst stale")
 
-        if direction * self.er <= 0.0 or abs(self.er) < cfg.momentum_min_er:
+        if cfg.momentum_min_er > 0 and (direction * self.er <= 0.0
+                                        or abs(self.er) < cfg.momentum_min_er):
             return self.block("ER low")
-        if direction * self.m1_comp < cfg.min_m1_strength:
+        if cfg.min_m1_strength > 0 and direction * self.m1_comp < cfg.min_m1_strength:
             return self.block("M1 strength")
-        if coherence(self.m1, (1, 3, 5, 15), direction) < cfg.min_m1_coherence:
+        if (cfg.min_m1_coherence > 0
+                and coherence(self.m1, (1, 3, 5, 15), direction) < cfg.min_m1_coherence):
             return self.block("M1 coherence")
         if direction * (bar[4] - bar[1]) <= 0.0:
             return self.block("bar body against")
-        if self.atr_m1 > 0 and bar[2] - bar[3] > cfg.big_bar_max_atr * self.atr_m1:
+        if (cfg.big_bar_max_atr > 0 and self.atr_m1 > 0
+                and bar[2] - bar[3] > cfg.big_bar_max_atr * self.atr_m1):
             return self.block("oversized bar")
 
-        lo = min(self.m1.closed(k)[3] for k in range(1, 32) if self.m1.closed(k))
-        hi = max(self.m1.closed(k)[2] for k in range(1, 32) if self.m1.closed(k))
-        maturity = bar[4] - lo if direction > 0 else hi - bar[4]
-        if self.atr_m5 > 0 and maturity / self.atr_m5 > cfg.max_maturity_m5_atr:
-            return self.block("move mature")
+        if cfg.max_maturity_m5_atr > 0 and self.atr_m5 > 0:
+            lo = min(self.m1.closed(k)[3] for k in range(1, 32) if self.m1.closed(k))
+            hi = max(self.m1.closed(k)[2] for k in range(1, 32) if self.m1.closed(k))
+            maturity = bar[4] - lo if direction > 0 else hi - bar[4]
+            if maturity / self.atr_m5 > cfg.max_maturity_m5_atr:
+                return self.block("move mature")
 
         if cfg.require_m5_alignment:
             if direction * self.m5_comp <= 0.0:
