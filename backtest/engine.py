@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 7).
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 8).
 
 Mirrors the EA's decision logic - same velocity composites, efficiency
 ratio, CUSUM burst detector, five-mode regime posterior - and the same
@@ -35,7 +35,7 @@ class Config:
     # sizing / stop
     risk_percent: float = 0.5            # used only when fixed_lots is 0
     hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
-    # Exit engine. Mirrors EA v7: the ONLY exits are the user's SL, TP,
+    # Exit engine. Mirrors EA v8: the ONLY exits are the user's SL, TP,
     # profit lock and trailing stop. The scratch mechanisms below were
     # removed from the EA and default to off; they remain here so the
     # effect of re-adding one can be measured before it is written back
@@ -65,7 +65,7 @@ class Config:
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
     use_session_filter: bool = False     # EA v3+: removed
     friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
-    # momentum module - mirrors EA v7 defaults (permissive; 0 = gate off)
+    # momentum module - mirrors EA v8 defaults (permissive; 0 = gate off)
     use_momentum: bool = True
     cusum_allowance: float = 0.18
     cusum_decay: float = 0.94
@@ -250,6 +250,7 @@ class Position:
     hard_stop: float
     fade_target: float = 0.0
     max_fav: float = 0.0
+    max_adv: float = 0.0
     launched: bool = False
     partial_done: bool = False
     stop: float = 0.0
@@ -269,6 +270,7 @@ class Trade:
     reason: str
     module: str
     max_fav: float
+    max_adv: float
 
 
 class Backtester:
@@ -536,7 +538,7 @@ class Backtester:
         self.trades.append(Trade(
             entry_time=pos.entry_time, exit_time=t_s, direction=pos.direction,
             lots=lots, entry=pos.entry, exit=fill, pnl=total, reason=reason,
-            module=pos.module, max_fav=pos.max_fav))
+            module=pos.module, max_fav=pos.max_fav, max_adv=pos.max_adv))
         self.pos = None
 
     def manage(self, t_s, bid, ask):
@@ -544,6 +546,7 @@ class Backtester:
         pos = self.pos
         move = pos.direction * ((bid if pos.direction > 0 else ask) - pos.entry)
         pos.max_fav = max(pos.max_fav, move)
+        pos.max_adv = min(pos.max_adv, move)
         if not pos.launched and pos.max_fav >= cfg.launch_progress_usd:
             pos.launched = True
         exit_px = bid if pos.direction > 0 else ask
@@ -730,14 +733,14 @@ def run(files, cfg: Config, trades_out=None):
         with open(trades_out, "w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(["entry_time", "exit_time", "dir", "lots", "entry",
-                        "exit", "pnl", "reason", "module", "max_fav",
+                        "exit", "profit", "reason", "module", "mfe", "mae",
                         "hold_seconds"])
             for t in bt.trades:
                 w.writerow([int(t.entry_time), int(t.exit_time),
                             "BUY" if t.direction > 0 else "SELL",
                             t.lots, round(t.entry, 3), round(t.exit, 3),
                             round(t.pnl, 2), t.reason, t.module,
-                            round(t.max_fav, 2),
+                            round(t.max_fav, 2), round(t.max_adv, 2),
                             int(t.exit_time - t.entry_time)])
     return summary
 

@@ -5,13 +5,13 @@ with 5-minute context. It decides **when to enter**; you own the trade
 once it is open. The EA closes nothing on its own — every exit comes
 from your stop loss, take profit, profit lock or trailing stop.
 
-Current build: **Version 7**.
+Current build: **Version 8**.
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `mt4/GoldScalperM1M5_Version7.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
+| `mt4/GoldScalperM1M5_Version8.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
 | `mt4/panel_preview.svg` | Pixel-accurate mock of the on-chart panel. |
 | `backtest/` | Tick-replay backtester + free Dukascopy data downloader. |
 | `reference/` | The five prior builds this EA was mined from. |
@@ -74,12 +74,20 @@ cooldown between entries, one position at a time, the regime and signal
 gates, news blackout windows (empty by default), close-if-the-broker-
 rejects-the-stop, and the gold-symbol lock.
 
-**Instrumentation**: an on-chart panel that always names the exact gate
-currently blocking entry, and a CSV trade ledger in `MQL4/Files`.
+**Instrumentation** (all in `MQL4/Files`):
+
+- **Event ledger** `GoldScalper_<symbol>_<account>.csv` — signals,
+  entries, exits, and every blocked bar when `LogGateDiagnostics` is on.
+- **Trade dataset** `GoldScalperTrades_<symbol>_<account>.csv` — one row
+  per completed trade carrying the maximum favourable and adverse
+  excursion plus the fifteen engine readings live at entry. Analyse it
+  with `python3 backtest/analyze_trades.py <file>`, which reports
+  whether the losers were wrong calls or right calls stopped out.
+- On-chart panel naming every gate currently blocking entry.
 
 ## Deploying
 
-1. Copy `mt4/GoldScalperM1M5_Version7.mq4` to `MQL4/Experts`, compile
+1. Copy `mt4/GoldScalperM1M5_Version8.mq4` to `MQL4/Experts`, compile
    (F7), attach to a **XAUUSD M1** chart.
 2. Arming is MT4's own switch: with AutoTrading OFF the EA runs in
    standby, showing every signal and blocker without trading. Turn
