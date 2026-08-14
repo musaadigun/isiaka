@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 5).
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 6).
 
 Mirrors the EA's decision logic - same velocity composites, efficiency
 ratio, CUSUM burst detector, five-mode regime posterior - and the same
@@ -35,7 +35,7 @@ class Config:
     # sizing / stop
     risk_percent: float = 0.5            # used only when fixed_lots is 0
     hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
-    # Exit engine. Mirrors EA v5: the ONLY exits are the user's SL, TP,
+    # Exit engine. Mirrors EA v6: the ONLY exits are the user's SL, TP,
     # profit lock and trailing stop. The scratch mechanisms below were
     # removed from the EA and default to off; they remain here so the
     # effect of re-adding one can be measured before it is written back
@@ -65,7 +65,7 @@ class Config:
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
     use_session_filter: bool = False     # EA v3+: removed
     friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
-    # momentum module - mirrors EA v5 defaults (permissive; 0 = gate off)
+    # momentum module - mirrors EA v6 defaults (permissive; 0 = gate off)
     use_momentum: bool = True
     cusum_allowance: float = 0.18
     cusum_decay: float = 0.94
@@ -88,7 +88,7 @@ class Config:
     momentum_min_er: float = 0.10
     min_impulse_drift: float = 0.0
     min_fade_noise: float = 0.40
-    max_shock_exhaust: float = 1.0
+    max_shock_exhaust: float = 0.0   # 0 = off, matching the EA
     # cost model
     commission_per_lot: float = 7.0        # round trip, account currency
     slippage_usd: float = 0.03             # applied to every fill
@@ -369,7 +369,7 @@ class Backtester:
         if not cfg.use_momentum:
             return 0
         noise, drift, impulse, exhaust, shock = self.modes
-        if cfg.max_shock_exhaust < 1.0 and shock + exhaust > cfg.max_shock_exhaust:
+        if cfg.max_shock_exhaust > 0 and shock + exhaust > cfg.max_shock_exhaust:
             return self.block("shock/exhaust")
         if cfg.min_impulse_drift > 0 and impulse + drift < cfg.min_impulse_drift:
             return self.block("impulse+drift low")
@@ -423,7 +423,8 @@ class Backtester:
         if not cfg.use_fade:
             return 0, 0.0
         noise, drift, impulse, exhaust, shock = self.modes
-        if shock + exhaust > cfg.max_shock_exhaust or noise < cfg.min_fade_noise:
+        if ((cfg.max_shock_exhaust > 0 and shock + exhaust > cfg.max_shock_exhaust)
+                or noise < cfg.min_fade_noise):
             return self.block("fade regime"), 0.0
         if abs(self.er) > cfg.fade_max_er or self.expansion > cfg.fade_max_expansion:
             return self.block("fade gates"), 0.0
