@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 8).
+"""Tick-replay backtester for GoldScalperM1M5 (mirrors EA Version 9).
 
 Mirrors the EA's decision logic - same velocity composites, efficiency
 ratio, CUSUM burst detector, five-mode regime posterior - and the same
@@ -35,7 +35,7 @@ class Config:
     # sizing / stop
     risk_percent: float = 0.5            # used only when fixed_lots is 0
     hard_stop_usd: float = 2.50          # EA: StopLoss_PriceUSD
-    # Exit engine. Mirrors EA v8: the ONLY exits are the user's SL, TP,
+    # Exit engine. Mirrors EA v9: the ONLY exits are the user's SL, TP,
     # profit lock and trailing stop. The scratch mechanisms below were
     # removed from the EA and default to off; they remain here so the
     # effect of re-adding one can be measured before it is written back
@@ -65,7 +65,7 @@ class Config:
     sessions_utc: tuple = ((7 * 60, 10 * 60), (12 * 60 + 30, 18 * 60))
     use_session_filter: bool = False     # EA v3+: removed
     friday_cutoff_hour_utc: int = 0      # EA v3+: removed (0 = off)
-    # momentum module - mirrors EA v8 defaults (permissive; 0 = gate off)
+    # momentum module - mirrors EA v9 defaults (permissive; 0 = gate off)
     use_momentum: bool = True
     cusum_allowance: float = 0.18
     cusum_decay: float = 0.94
@@ -76,6 +76,11 @@ class Config:
     big_bar_max_atr: float = 0.0
     max_maturity_m5_atr: float = 0.0
     require_m5_alignment: bool = False
+    # M5 trend filter (EA v9): 0 = off, 1 = block against, 2 = pullback only
+    trend_filter_mode: int = 0
+    m5_trend_ema_period: int = 50
+    trend_slope_min_atr: float = 0.0
+    trend_max_distance_atr: float = 1.5
     # fade module (off by default: gold fades failed H4 stability tests)
     use_fade: bool = False
     fade_ma_period: int = 50
@@ -290,6 +295,8 @@ class Backtester:
         self.expansion = 1.0
         self.atr_m1 = self.atr_m5 = 0.0
         self.fade_armed = True
+        self.trend_dir = 0
+        self.trend_dist_atr = 0.0
         self.signal = 0
         self.signal_module = ""
         self.signal_ref = 0.0
@@ -319,6 +326,21 @@ class Backtester:
         slow = atr(self.m1, 48)
         fast = atr(self.m1, 6)
         self.expansion = clamp(fast / slow, 0.25, 4.0) if slow > 0 else 1.0
+
+        # M5 trend anchor: price on the right side AND the line leaning
+        # that way, so a flat EMA in chop reports "no side"
+        self.trend_dir, self.trend_dist_atr = 0, 0.0
+        if cfg.m5_trend_ema_period >= 2:
+            ema = ema_close(self.m5, cfg.m5_trend_ema_period, 1)
+            ema_prev = ema_close(self.m5, cfg.m5_trend_ema_period, 2)
+            close5 = self.m5.closed(1)
+            if ema > 0 and ema_prev > 0 and close5 and self.atr_m5 > 0:
+                self.trend_dist_atr = (close5[4] - ema) / self.atr_m5
+                slope = (ema - ema_prev) / self.atr_m5
+                if close5[4] > ema and slope >= cfg.trend_slope_min_atr:
+                    self.trend_dir = 1
+                elif close5[4] < ema and -slope >= cfg.trend_slope_min_atr:
+                    self.trend_dir = -1
 
         # CUSUM on standardized M1 returns
         c1, c2 = self.m1.closed(1), self.m1.closed(2)
@@ -410,6 +432,15 @@ class Backtester:
             maturity = bar[4] - lo if direction > 0 else hi - bar[4]
             if maturity / self.atr_m5 > cfg.max_maturity_m5_atr:
                 return self.block("move mature")
+
+        if cfg.trend_filter_mode > 0:
+            if self.trend_dir == 0:
+                return self.block("no M5 trend")
+            if self.trend_dir != direction:
+                return self.block("against M5 trend")
+            if (cfg.trend_filter_mode >= 2 and cfg.trend_max_distance_atr > 0
+                    and abs(self.trend_dist_atr) > cfg.trend_max_distance_atr):
+                return self.block("far from M5 EMA")
 
         if cfg.require_m5_alignment:
             if direction * self.m5_comp <= 0.0:
@@ -762,6 +793,10 @@ def main():
     ap.add_argument("--spread-add", type=float, default=0.0,
                     help="widen recorded spreads by this many USD (stress test)")
     ap.add_argument("--enable-fade", action="store_true")
+    ap.add_argument("--trend-filter", type=int, default=0, choices=(0, 1, 2),
+                    help="M5 EMA trend filter: 0 off, 1 block against, 2 pullback only")
+    ap.add_argument("--trend-ema", type=int, default=50,
+                    help="M5 trend EMA period (default 50)")
     ap.add_argument("--sessions", action="store_true",
                     help="apply a London/NY session filter (the EA has none)")
     ap.add_argument("--trades-out", default=None, help="write per-trade CSV here")
@@ -776,6 +811,8 @@ def main():
                  fixed_lots=args.lots,
                  commission_per_lot=args.commission, slippage_usd=args.slippage,
                  spread_add_usd=args.spread_add, use_fade=args.enable_fade,
+                 trend_filter_mode=args.trend_filter,
+                 m5_trend_ema_period=args.trend_ema,
                  use_session_filter=args.sessions)
     summary = run(files, cfg, trades_out=args.trades_out)
     if args.json:
