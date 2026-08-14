@@ -5,13 +5,13 @@ with 5-minute context. It decides **when to enter**; you own the trade
 once it is open. The EA closes nothing on its own — every exit comes
 from your stop loss, take profit, profit lock or trailing stop.
 
-Current build: **Version 9**.
+Current build: **Version 10**.
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `mt4/GoldScalperM1M5_Version9.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
+| `mt4/GoldScalperM1M5_Version10.mq4` | The EA. Compile in MetaEditor, attach to XAUUSD M1. |
 | `mt4/panel_preview.svg` | Pixel-accurate mock of the on-chart panel. |
 | `backtest/` | Tick-replay backtester + free Dukascopy data downloader. |
 | `reference/` | The five prior builds this EA was mined from. |
@@ -73,12 +73,14 @@ M5 trend filter:
 |---|---|---|
 | `TrendFilterMode` | 0 | 0 = off, 1 = block trades against the M5 trend, 2 = also require a pullback to the line |
 | `M5TrendEMAPeriod` | 50 | EMA period on M5 — the directional anchor |
-| `TrendSlopeMinATR` | 0.00 | require this much EMA slope per bar in M5 ATRs; 0 = direction only |
+| `TrendSlopeMinATR` | 0.00 | minimum EMA slope per bar in M5 ATRs. 0 = side-of-line only |
 | `TrendMaxDistanceATR` | 1.50 | mode 2 only: entry must be within this many M5 ATRs of the line |
 
-The trend reads `UP` only when price is above a rising EMA and `DOWN`
-only when it is below a falling one; a flat EMA in chop reports no
-side, so the filter refuses rather than flipping on every touch.
+The trend reads `UP` when price is above the EMA and the EMA is not
+falling, `DOWN` when below and not rising. With the default
+`TrendSlopeMinATR = 0` a flat EMA still gives a side; raise it if you
+want chop to report no side and the filter to refuse rather than pick
+one.
 
 All `*_PriceUSD` values are absolute gold price movements ($0.80 = 80
 cents of XAUUSD price).
@@ -101,7 +103,7 @@ rejects-the-stop, and the gold-symbol lock.
 
 ## Deploying
 
-1. Copy `mt4/GoldScalperM1M5_Version9.mq4` to `MQL4/Experts`, compile
+1. Copy `mt4/GoldScalperM1M5_Version10.mq4` to `MQL4/Experts`, compile
    (F7), attach to a **XAUUSD M1** chart.
 2. Arming is MT4's own switch: with AutoTrading OFF the EA runs in
    standby, showing every signal and blocker without trading. Turn

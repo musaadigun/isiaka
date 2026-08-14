@@ -18,13 +18,13 @@ Usage:
 
 import argparse
 import csv
-import statistics
 import sys
 
 NUMERIC = ("lots", "entry_price", "exit_price", "profit", "hold_seconds",
            "hour", "mfe", "mae", "er", "cusum_up", "cusum_dn", "m1_strength",
            "coherence", "maturity_m5atr", "atr_m1", "atr_m5", "expansion",
-           "spread_at_entry", "noise", "drift", "impulse", "exhaustion", "shock")
+           "spread_at_entry", "noise", "drift", "impulse", "exhaustion", "shock",
+           "trend_dir", "trend_dist_atr")
 
 
 def load(path):
@@ -151,6 +151,30 @@ def by_category(rows, field):
               f"{net:>+9.2f}  {net / len(group):>+8.2f}")
 
 
+def trend_split(rows):
+    """Did trading with the M5 trend beat trading against it?"""
+    print("\n--- outcome by M5 trend agreement ---")
+    print(f"{'':>16}  {'n':>4}  {'win%':>6}  {'net':>9}  {'avg':>8}")
+    groups = {"with trend": [], "against trend": [], "no trend": []}
+    for r in rows:
+        td = r.get("trend_dir", 0.0)
+        d = 1.0 if r.get("dir") == "BUY" else -1.0
+        if td == 0.0:
+            groups["no trend"].append(r)
+        elif td == d:
+            groups["with trend"].append(r)
+        else:
+            groups["against trend"].append(r)
+    for name, group in groups.items():
+        if not group:
+            continue
+        w = sum(1 for r in group if r["profit"] > 0)
+        net = sum(r["profit"] for r in group)
+        print(f"{name:>16}  {len(group):>4}  {pct(w, len(group)):>5.0f}%  "
+              f"{net:>+9.2f}  {net / len(group):>+8.2f}")
+    print("If 'against trend' is the loss centre, TrendFilterMode=1 removes it.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -171,6 +195,8 @@ def main():
     adverse_verdict(wins)
     by_category(rows, "dir")
     by_category(rows, "reason")
+    if "trend_dir" in rows[0]:
+        trend_split(rows)
     if args.bucket:
         bucket(rows, args.bucket, args.bins)
     else:
