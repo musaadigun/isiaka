@@ -1,0 +1,7 @@
+# Compiled MQL binaries
+*.ex4
+*.ex5
+
+# MetaEditor / terminal artefacts
+*.log
+*.bak
