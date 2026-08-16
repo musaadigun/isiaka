@@ -1,7 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                                         Defs.mqh |
-//|                    Shared enums and settings structs for the EA. |
+//|                   Shared enums and settings structs. MQL4 build |
+//|                   600+ required (classes and structs in .mqh).  |
 //+------------------------------------------------------------------+
+#property strict
+
 #ifndef ISIAKA_DEFS_MQH
 #define ISIAKA_DEFS_MQH
 
@@ -37,10 +40,11 @@ struct SRiskSettings
 
 struct STradeSettings
 {
-   ulong          magic;
-   ulong          deviation_points;
+   int            magic;
+   int            slippage_points;
    int            max_spread_points;   // skip entries when spread is wider
-   int            max_positions;       // concurrent positions for this magic
+   int            max_positions;       // concurrent orders for this magic
+   int            max_retries;         // resend attempts on recoverable errors
 
    bool           use_breakeven;
    double         breakeven_trigger_pts;

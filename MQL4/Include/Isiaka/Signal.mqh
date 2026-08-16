@@ -7,14 +7,17 @@
 //|  Contract:                                                       |
 //|    Check() returns SIGNAL_BUY / SIGNAL_SELL / SIGNAL_NONE.       |
 //|    StopPoints() / TargetPoints() return the distances the EA     |
-//|    should use for the trade it is about to open.                 |
+//|    should use for the trade it is about to open, or 0 to let     |
+//|    the EA inputs decide.                                         |
 //|                                                                  |
-//|  Bar indexing rule: index 0 is the forming bar and its high,     |
-//|  low and close are still moving. Read your conditions from bar   |
-//|  1 or higher unless you deliberately want intrabar behaviour --  |
-//|  reading bar 0 is the single most common reason a backtest looks |
-//|  brilliant and the live account does not.                        |
+//|  Bar indexing rule: shift 0 is the forming bar -- its high, low  |
+//|  and close are still moving. Read your conditions from shift 1   |
+//|  or higher unless you deliberately want intrabar behaviour.      |
+//|  Reading shift 0 is the single most common reason a backtest     |
+//|  looks brilliant and the live account does not.                  |
 //+------------------------------------------------------------------+
+#property strict
+
 #ifndef ISIAKA_SIGNAL_MQH
 #define ISIAKA_SIGNAL_MQH
 
@@ -25,18 +28,13 @@ class CSignal
 private:
    string            m_symbol;
    ENUM_TIMEFRAMES   m_timeframe;
-
-   //--- ATR is wired up because stop sizing usually wants it. If your rules
-   //--- do not use ATR you can drop this handle and the STOP_ATR mode.
-   int               m_atr_handle;
    int               m_atr_period;
 
    double            m_stop_points;
    double            m_target_points;
 
 public:
-   CSignal(void) : m_atr_handle(INVALID_HANDLE),
-                   m_atr_period(14),
+   CSignal(void) : m_atr_period(14),
                    m_stop_points(0.0),
                    m_target_points(0.0) {}
 
@@ -46,43 +44,30 @@ public:
       m_timeframe  = tf;
       m_atr_period = atr_period;
 
-      m_atr_handle = iATR(m_symbol, m_timeframe, m_atr_period);
-      if(m_atr_handle == INVALID_HANDLE)
-      {
-         PrintFormat("CSignal: iATR failed for %s, error %d", m_symbol, GetLastError());
-         return false;
-      }
-
-      // TODO: create the indicator handles your trend needs here.
+      // TODO: any one-off setup your rules need goes here.
 
       return true;
    }
 
    void Deinit(void)
    {
-      if(m_atr_handle != INVALID_HANDLE)
-      {
-         IndicatorRelease(m_atr_handle);
-         m_atr_handle = INVALID_HANDLE;
-      }
+      // TODO: release anything Init() acquired. Nothing to do yet.
    }
 
-   //--- ATR value on a closed bar, in points.
-   double AtrPoints(const int shift = 1) const
+   //--- ATR on a closed bar, expressed in points.
+   double AtrPoints(const int shift = 1)
    {
-      double buf[];
-      if(CopyBuffer(m_atr_handle, 0, shift, 1, buf) != 1)
+      double atr   = iATR(m_symbol, m_timeframe, m_atr_period, shift);
+      double point = MarketInfo(m_symbol, MODE_POINT);
+
+      if(atr <= 0.0 || point <= 0.0)
          return 0.0;
 
-      double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
-      if(point <= 0.0)
-         return 0.0;
-
-      return buf[0] / point;
+      return atr / point;
    }
 
-   double StopPoints(void)   const { return m_stop_points;   }
-   double TargetPoints(void) const { return m_target_points; }
+   double StopPoints(void)   { return m_stop_points;   }
+   double TargetPoints(void) { return m_target_points; }
 
    //+---------------------------------------------------------------+
    //| Evaluate the entry rules for the bar that just closed.        |
@@ -90,7 +75,7 @@ public:
    //| Fill in the body below with the trend you observed. Set       |
    //| m_stop_points / m_target_points before returning a direction  |
    //| if the stop depends on the setup (e.g. behind the swing that  |
-   //| triggered it); leave them at 0 to let the EA inputs decide.   |
+   //| triggered it); leave them at 0 to use the EA inputs instead.  |
    //+---------------------------------------------------------------+
    ENUM_SIGNAL Check(void)
    {
@@ -100,15 +85,18 @@ public:
       // ------------------------------------------------------------
       // TODO: strategy rules.
       //
-      // Example of the shape this takes -- read closed bars only:
+      // Example of the shape this takes -- closed bars only, so shift 1
+      // is the bar that just finished and shift 2 the one before it:
       //
-      //   MqlRates rates[];
-      //   ArraySetAsSeries(rates, true);
-      //   if(CopyRates(m_symbol, m_timeframe, 1, 3, rates) != 3)
-      //      return SIGNAL_NONE;
+      //   double close1 = iClose(m_symbol, m_timeframe, 1);
+      //   double high2  = iHigh(m_symbol, m_timeframe, 2);
+      //   double low2   = iLow(m_symbol, m_timeframe, 2);
       //
-      //   if(<your bullish condition on rates[0], rates[1], ...>)
+      //   if(<your bullish condition>)
+      //   {
+      //      m_stop_points = (close1 - low2) / MarketInfo(m_symbol, MODE_POINT);
       //      return SIGNAL_BUY;
+      //   }
       //
       //   if(<your bearish condition>)
       //      return SIGNAL_SELL;
@@ -117,9 +105,10 @@ public:
       return SIGNAL_NONE;
    }
 
-   //--- Optional: return true to close an open position early, independently
-   //--- of stop loss and take profit (e.g. the trend condition has flipped).
-   bool ShouldExit(const ENUM_POSITION_TYPE type)
+   //--- Optional: return true to close an open order early, independently of
+   //--- stop loss and take profit (e.g. the trend condition has flipped).
+   //--- `order_type` is OP_BUY or OP_SELL.
+   bool ShouldExit(const int order_type)
    {
       // TODO: exit rules, if the strategy has any beyond SL/TP.
       return false;

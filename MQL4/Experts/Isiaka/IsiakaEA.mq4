@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                      IsiakaEA.mq5 |
+//|                                                      IsiakaEA.mq4 |
 //|                                                                   |
 //|  Main expert. Wires the strategy layer (Signal.mqh) to sizing     |
 //|  (Risk.mqh) and order handling (Execution.mqh). The trading rules |
@@ -15,31 +15,28 @@
 #include <Isiaka/Signal.mqh>
 
 //--- Strategy -------------------------------------------------------
-input group "Strategy"
 input ENUM_TIMEFRAMES InpTimeframe          = PERIOD_CURRENT; // Signal timeframe
 input bool            InpNewBarOnly         = true;           // Evaluate on new bar only
 input int             InpAtrPeriod          = 14;             // ATR period
 
-//--- Stops ----------------------------------------------------------
-input group "Stops and targets"
+//--- Stops and targets ----------------------------------------------
 input ENUM_STOP_MODE  InpStopMode           = STOP_ATR;       // Stop loss mode
 input double          InpStopPoints         = 300;            // Stop distance (points)
 input double          InpAtrStopMultiplier  = 2.0;            // Stop = ATR * this
 input double          InpRewardRatio        = 2.0;            // TP = stop * this (0 = no TP)
 
 //--- Money management -----------------------------------------------
-input group "Money management"
 input ENUM_LOT_MODE   InpLotMode            = LOT_RISK_PERCENT; // Sizing mode
 input double          InpFixedLot           = 0.10;           // Fixed volume
 input double          InpRiskPercent        = 1.0;            // Risk per trade (% of balance)
 input double          InpMaxLot             = 0.0;            // Volume ceiling (0 = broker max)
 
 //--- Trade management -----------------------------------------------
-input group "Trade management"
-input ulong           InpMagic              = 20260816;       // Magic number
-input ulong           InpDeviationPoints    = 20;             // Max slippage (points)
+input int             InpMagic              = 20260816;       // Magic number
+input int             InpSlippagePoints     = 20;             // Max slippage (points)
 input int             InpMaxSpreadPoints    = 40;             // Max spread to enter (0 = off)
-input int             InpMaxPositions       = 1;              // Max concurrent positions
+input int             InpMaxPositions       = 1;              // Max concurrent orders
+input int             InpMaxRetries         = 3;              // Resend attempts on errors
 
 input bool            InpUseBreakeven       = true;           // Move stop to breakeven
 input double          InpBreakevenTriggerPts= 300;            // Trigger (points in profit)
@@ -51,7 +48,6 @@ input double          InpTrailingDistPts    = 250;            // Trail distance 
 input double          InpTrailingStepPts    = 50;             // Min step before modifying
 
 //--- Session filter --------------------------------------------------
-input group "Session filter"
 input bool            InpUseSessionFilter   = false;          // Restrict trading hours
 input int             InpStartHour          = 7;              // Start hour (server time)
 input int             InpEndHour            = 20;             // End hour (server time)
@@ -61,7 +57,7 @@ CRisk      g_risk;
 CExecution g_exec;
 CSignal    g_signal;
 
-ENUM_TIMEFRAMES g_tf   = PERIOD_CURRENT;
+ENUM_TIMEFRAMES g_tf            = PERIOD_CURRENT;
 datetime        g_last_bar_time = 0;
 
 //+------------------------------------------------------------------+
@@ -89,9 +85,10 @@ int OnInit()
 
    STradeSettings trade_cfg;
    trade_cfg.magic                 = InpMagic;
-   trade_cfg.deviation_points      = InpDeviationPoints;
+   trade_cfg.slippage_points       = InpSlippagePoints;
    trade_cfg.max_spread_points     = InpMaxSpreadPoints;
    trade_cfg.max_positions         = InpMaxPositions;
+   trade_cfg.max_retries           = InpMaxRetries;
    trade_cfg.use_breakeven         = InpUseBreakeven;
    trade_cfg.breakeven_trigger_pts = InpBreakevenTriggerPts;
    trade_cfg.breakeven_offset_pts  = InpBreakevenOffsetPts;
@@ -100,19 +97,19 @@ int OnInit()
    trade_cfg.trailing_distance_pts = InpTrailingDistPts;
    trade_cfg.trailing_step_pts     = InpTrailingStepPts;
 
-   if(!g_risk.Init(_Symbol, risk_cfg))
+   if(!g_risk.Init(Symbol(), risk_cfg))
       return INIT_FAILED;
 
-   if(!g_exec.Init(_Symbol, trade_cfg))
+   if(!g_exec.Init(Symbol(), trade_cfg))
       return INIT_FAILED;
 
-   if(!g_signal.Init(_Symbol, g_tf, InpAtrPeriod))
+   if(!g_signal.Init(Symbol(), g_tf, InpAtrPeriod))
       return INIT_FAILED;
 
-   g_last_bar_time = iTime(_Symbol, g_tf, 0);
+   g_last_bar_time = iTime(Symbol(), g_tf, 0);
 
-   PrintFormat("IsiakaEA initialised on %s %s, magic %I64u",
-               _Symbol, EnumToString(g_tf), InpMagic);
+   PrintFormat("IsiakaEA initialised on %s, timeframe %d, magic %d",
+               Symbol(), (int)g_tf, InpMagic);
    return INIT_SUCCEEDED;
 }
 
@@ -125,7 +122,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 bool IsNewBar()
 {
-   datetime t = iTime(_Symbol, g_tf, 0);
+   datetime t = iTime(Symbol(), g_tf, 0);
    if(t == 0)
       return false;
 
@@ -145,12 +142,13 @@ bool SessionOpen()
 
    MqlDateTime now;
    TimeToStruct(TimeCurrent(), now);
+   int hour = now.hour;
 
    //--- Supports windows that wrap past midnight (e.g. 22 -> 6).
    if(InpStartHour <= InpEndHour)
-      return (now.hour >= InpStartHour && now.hour < InpEndHour);
+      return (hour >= InpStartHour && hour < InpEndHour);
 
-   return (now.hour >= InpStartHour || now.hour < InpEndHour);
+   return (hour >= InpStartHour || hour < InpEndHour);
 }
 
 //+------------------------------------------------------------------+
@@ -200,6 +198,13 @@ void OnTick()
    if(InpNewBarOnly && !new_bar)
       return;
 
+   //--- Strategy-driven exits, checked before looking for new entries.
+   if(g_exec.HasPosition(OP_BUY) && g_signal.ShouldExit(OP_BUY))
+      g_exec.CloseAll(OP_BUY);
+
+   if(g_exec.HasPosition(OP_SELL) && g_signal.ShouldExit(OP_SELL))
+      g_exec.CloseAll(OP_SELL);
+
    if(!SessionOpen())
       return;
 
@@ -224,6 +229,6 @@ void OnTick()
    }
 
    if(!g_exec.Open(sig, lots, stop_points, target_points, "IsiakaEA"))
-      PrintFormat("Entry failed: dir=%d lots=%.2f stop=%.0f", sig, lots, stop_points);
+      PrintFormat("Entry failed: dir=%d lots=%.2f stop=%.0f", (int)sig, lots, stop_points);
 }
 //+------------------------------------------------------------------+
