@@ -11,11 +11,41 @@ include files).
 ```
 MQL4/
   Experts/Isiaka/IsiakaEA.mq4      Main expert: inputs, tick loop, wiring
+  Indicators/Isiaka/IsiakaEMA.mq4  EMA with a free period input
   Include/Isiaka/Signal.mqh        >>> THE STRATEGY GOES HERE <<<
   Include/Isiaka/Risk.mqh          Position sizing (fixed lot or % risk)
   Include/Isiaka/Execution.mqh     Orders, breakeven, trailing, broker limits
   Include/Isiaka/Defs.mqh          Shared enums and settings structs
+
+research/                          Data study of the EMA50 cross on GOLD M5
 ```
+
+## IsiakaEMA indicator
+
+`EMA[i] = Price[i] * a + EMA[i+1] * (1 - a)` with `a = 2 / (period + 1)` — the
+same recursion MT4 uses for `MODE_EMA`, so the line sits exactly on top of the
+built-in EMA.
+
+| Input | Default | Notes |
+|---|---|---|
+| `InpPeriod` | 50 | Any period ≥ 1 |
+| `InpAppliedPrice` | `PRICE_CLOSE` | Close, Open, High, Low, Median, Typical, Weighted |
+| `InpShift` | 0 | Horizontal shift in bars |
+| `InpTimeframe` | `PERIOD_CURRENT` | Set higher to draw e.g. the H1 EMA on an M5 chart |
+| `InpColor` / `InpWidth` | Red / 2 | Appearance |
+| `InpSelfCheck` | true | Compares every bar against MT4's `iMA()` and prints the largest deviation to the Experts log |
+| `InpShowStats` | false | On-chart count of how often price closes across the EMA |
+
+Nothing in it is tied to a timeframe or symbol — it works on GOLD M1 through MN,
+and on any other instrument.
+
+`InpSelfCheck` exists so you never have to take the maths on trust: it prints a
+line like `max deviation from MT4 built-in EMA(50) across 5000 bars = 0.0000000000`.
+Anything under 0.0000001 is floating-point noise rather than a real difference.
+
+`InpShowStats` counts how often the applied price closes on the opposite side of
+the EMA — what an EA actually fires on, which is normally far more often than a
+chart reader would guess.
 
 ## Install
 

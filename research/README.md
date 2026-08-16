@@ -4,12 +4,37 @@ Scripts that measured the bare EMA50 close-cross on the supplied GOLD M5 export
 (66,274 bars, 2025-07-24 → 2026-08-07, price 3269 → 5589).
 
 ```
+00_ema_proof.py      proves the EMA matches MT4's own recursion, bit for bit
 01_cross_stats.py    cross counts, forward returns vs baseline, hold time, MFE/MAE
 02_cost_and_oos.py   spread sensitivity, first-half vs second-half split, SL/TP grid
 03_filters.py        persistence filter, H1 trend alignment, buy-and-hold sanity check
+04_cross_frequency.py  per-session cross counts, worked example day, reconciliation
 ```
 
 Point the `CSV` constant at the export and run with pandas + numpy.
+
+## Is the EMA right?
+
+`00_ema_proof.py` answers this, because the whole study rests on it.
+
+MT4's `Moving Average.mq4` computes `EMA[i] = Price[i]*a + EMA[i+1]*(1-a)` with
+`a = 2/(N+1)`. For N=50 that is `a = 2/51 = 0.0392156863`. Running that recursion
+longhand against `pandas.ewm(span=50, adjust=False)` over all 66,274 bars gives a
+**maximum difference of 0.000e+00** — the two are the same calculation.
+
+The starting value does not matter either. Seeded three ways (MT4's first-price
+seed, an SMA(50) seed, and a deliberately absurd seed $500 off), all three agree
+to under a cent by bar 200 and produce **identical cross counts**. The study drops
+the first 200 bars for exactly this reason.
+
+Cross count by period, as a sanity check that the counter responds sensibly:
+
+| EMA period | Crosses | Per session |
+|---|---|---|
+| 20 | 9,239 | 40.5 |
+| 50 | 5,719 | 25.1 |
+| 100 | 3,887 | 17.0 |
+| 200 | 2,863 | 12.6 |
 
 ## Findings
 
@@ -17,7 +42,7 @@ Point the `CSV` constant at the export and run with pandas + numpy.
 
 | Measure | Result |
 |---|---|
-| Crosses | 5,719 (~15 per day) |
+| Crosses | 5,719 (~23 per trading session) |
 | Reverse within 1 bar / 3 bars | 29% / 50% |
 | Median MFE ÷ median MAE | 0.91–1.04 (symmetric) |
 | Long cross, **zero** cost | −$0.09 per trade |
@@ -39,6 +64,22 @@ sample** — the signature of curve-fitting, not edge.
   first.
 - H1 trend context is resampled from the same M5 data and shifted one bar to
   avoid lookahead.
+
+## Frequency: two correct answers
+
+Counting per **calendar day** (378, weekends included) gives 15.1/day. That
+denominator is wrong — gold does not trade at weekends. Over the **244 real
+trading sessions** in the file it is **23.4 per session**; over the 228 full
+sessions (≥250 bars) it is 25.1. Median 24, quietest day 5, busiest 51.
+
+The eye counts far fewer because most crosses are invisible at chart zoom. On
+2025-07-28 four crosses landed between 14:45 and 15:05 with price sitting $0.09
+to $1.28 from the EMA — one pixel on a two-day chart, but four real signals to
+an EA. Requiring a cross to eventually travel 2×ATR past the EMA cuts 5,719 down
+to 1,347 (5.5/session), which is roughly what a chart reader counts.
+
+That margin filter is **descriptive only**. It asks how far price went *after*
+the cross, so it cannot be used to select entries in real time.
 
 ## Bug worth remembering
 
