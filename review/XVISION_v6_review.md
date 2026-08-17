@@ -1,11 +1,16 @@
 # Code review — XVISION_Gold_EMA50_Directional_EA_v6.mq4
 
 > **Status:** the crash, all four critical findings, H1-H7 and M5 are fixed in
-> `MQL4/Experts/Isiaka/XVISION_Gold_EMA50_Directional_EA_v7.mq4`, across four
-> commits starting at `4279d35`. Still open: **M1, M2, M3, M6, M7, M8, M9** and
-> all of **L1-L7**. M1 (the two identical normalisation functions) and M2 (inputs
-> doing double duty) both need a decision about intent before they can be fixed
-> correctly, rather than a code change.
+> `MQL4/Experts/Isiaka/XVISION_Gold_EMA50_Directional_EA_v7.mq4`. Still open:
+> **M1, M2, M3, M6, M7, M8, M9** and all of **L1-L7**. M1 (the two identical
+> normalisation functions) and M2 (inputs doing double duty) both need a decision
+> about intent before they can be fixed correctly, rather than a code change.
+>
+> **Correction:** the first attempt at the crash fix removed only the *dashboard*
+> branch of `ValidateInputs()`. The other fourteen rejection paths listed below
+> were left intact, so the EA still detached on most input edits. The rule was
+> stated correctly and applied to one case only. `OnInit()` now never returns a
+> non-zero value at all — see `ResolveInputs()`.
 
 1,657 lines, reviewed in full. Findings are ordered by severity. Nothing here was
 compiled — there is no MetaEditor on Linux — so each finding is marked with how it

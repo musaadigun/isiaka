@@ -4,10 +4,16 @@
 //|  signal timeframe.                                               |
 //|                                                                  |
 //|  v7 changes from v6:                                             |
-//|   - Cosmetic inputs are clamped instead of unloading the EA.     |
-//|     v6 returned INIT_PARAMETERS_INCORRECT for a dashboard that   |
-//|     was merely small, which MT4 answers by removing the expert   |
-//|     from the chart.                                              |
+//|   - OnInit() NEVER returns a non-zero value. In MT4 that removes |
+//|     the expert from the chart, and because OnDeinit() has already |
+//|     deleted the panel the EA simply vanishes -- which is what    |
+//|     "it crashes when I change an input" actually was. v6 had     |
+//|     fourteen such traps. Every repairable one is now clamped and |
+//|     reported; the two genuinely unusable states (a non-gold      |
+//|     symbol under RestrictToGoldSymbols, and an untradeable lot   |
+//|     size) block trading while the EA stays attached and says so. |
+//|   - Every tunable input is read through a resolved g_* copy, so  |
+//|     a clamped value is the one the logic actually uses.          |
 //|   - The dashboard no longer rewrites every object property on    |
 //|     every tick, and only redraws when something actually         |
 //|     changed.                                                     |
@@ -153,22 +159,61 @@ uint     g_lastPanelRefresh=0;
 bool     g_panelBuilt=false;
 bool     g_panelChanged=false;
 
+// Resolved (clamped) trading inputs. Every tunable value is read from these
+// rather than from the input variables directly, so that a value which cannot
+// be used is repaired and reported instead of unloading the EA.
+int      g_magic=50503006;
+double   g_fixedLot=0.01;
+int      g_emaPeriod=50;
+int      g_atrPeriod=14;
+int      g_gradientLookback=3;
+double   g_contGradientMin=0.04;
+int      g_maxRangeVotes=1;
+int      g_rangeLookback=8;
+int      g_rangeCrossVoteMin=3;
+double   g_flatGradientThreshold=0.02;
+double   g_minEfficiency=0.25;
+double   g_revMinCloseDistATR=0.60;
+double   g_revMinGradImprove=0.03;
+double   g_revMinBodyATR=0.50;
+double   g_revMinDirGradient=0.00;
+bool     g_enableRetest=true;
+int      g_retestTrendCloses=3;
+double   g_retestMinMoveAwayATR=0.50;
+double   g_retestTouchTolATR=0.10;
+double   g_retestMaxPenetrationATR=0.25;
+double   g_retestMinRecoveryATR=0.10;
+double   g_retestMinCloseLocPct=65.0;
+double   g_retestEntryBufferATR=0.05;
+int      g_retestExpiryBars=2;
+int      g_maxRetestsPerLeg=1;
+int      g_quietBarsRequired=4;
+double   g_stopLossMoney=5.00;
+double   g_takeProfitMoney=5.00;
+double   g_maxSpread=0.20;
+double   g_maxEntryDeviation=2.00;
+double   g_maxSlippage=0.50;
+bool     g_enableTrailing=false;
+double   g_trailStart=5.00;
+double   g_trailDistance=2.00;
+double   g_trailStep=0.50;
+bool     g_enableProfitLock=false;
+double   g_lockTrigger=5.00;
+double   g_lockMoney=1.00;
+
+// Set when the EA cannot trade at all but must stay on the chart anyway.
+bool     g_tradingBlocked=false;
+string   g_blockReason="";
+
 //+------------------------------------------------------------------+
 //| Initialization.                                                  |
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   if(!ValidateInputs())
-      return(INIT_PARAMETERS_INCORRECT);
-
+   // Nothing below may return a non-zero value. See ResolveInputs().
    ResolveDashboardGeometry();
+   ResolveInputs();
    g_panelBuilt=false;
-
-   if(RestrictToGoldSymbols && !IsGoldSymbol())
-     {
-      Print("XVISION EMA50 V7: attach this EA to a GOLD/XAU symbol.");
-      return(INIT_FAILED);
-     }
 
    LoadEpisodeState();
    RecoverRetestOrderState();
@@ -179,8 +224,10 @@ int OnInit()
    UpdateDashboard(true);
    Print("XVISION EMA50 V7 initialized on ",Symbol(),
          " timeframe=",TimeframeName(SignalTimeframe),
+         " magic=",g_magic,
          " locked=",BoolText(g_episodeLocked),
-         " quietBars=",g_quietBars);
+         " quietBars=",g_quietBars,
+         " trading=",(g_tradingBlocked ? "BLOCKED ("+g_blockReason+")" : "enabled"));
    return(INIT_SUCCEEDED);
   }
 
@@ -205,59 +252,162 @@ void OnTick()
   }
 
 //+------------------------------------------------------------------+
-//| Validate all user inputs.                                       |
+//| Resolve every tunable input into a usable value.                 |
+//|                                                                  |
+//| THE RULE: OnInit() must never return a non-zero value. In MT4    |
+//| that removes the expert from the chart, and because OnDeinit()   |
+//| has already deleted the panel, the EA simply vanishes -- which   |
+//| is indistinguishable from a crash.                               |
+//|                                                                  |
+//| v6 rejected fourteen separate input combinations this way, most  |
+//| of them values a reasonable person would type: four range votes, |
+//| an efficiency entered as a percentage, two required retest       |
+//| closes, a profit lock equal to its trigger. Every one of them is |
+//| repairable, so every one of them is now clamped and reported.    |
+//|                                                                  |
+//| Only two states are genuinely unusable, and neither detaches:    |
+//| a non-gold symbol under RestrictToGoldSymbols, and a broken lot  |
+//| grid. Both set g_tradingBlocked, which stops orders and says so  |
+//| on the dashboard instead of unloading the EA.                    |
 //+------------------------------------------------------------------+
-bool ValidateInputs()
+void ClampInt(const string name,const int requested,const int low,
+              const int high,int &target)
   {
-   if(MagicNumber<=0)
-     { Print("Validation: MagicNumber must be positive."); return(false); }
-   if(FixedLotSize<=0.0)
-     { Print("Validation: FixedLotSize must be positive."); return(false); }
-   if(EMA_Period<2 || EMA_Period>10000 || ATR_Period<2 || ATR_Period>10000 ||
-      GradientLookbackBars<1 || GradientLookbackBars>10000)
-     { Print("Validation: EMA, ATR, and gradient lookback values are invalid."); return(false); }
-   if(RangeLookbackBars<2 || RangeLookbackBars>10000 || RangeCrossingVoteMinimum<1 ||
-      RangeCrossingVoteMinimum>RangeLookbackBars)
-     { Print("Validation: range lookback inputs are invalid."); return(false); }
-   if(ContinuationGradientMinimum<0.0 || FlatGradientThreshold<0.0 ||
-      MinimumDirectionalEfficiency<0.0 || MinimumDirectionalEfficiency>1.0)
-     { Print("Validation: continuation/range thresholds are invalid."); return(false); }
-   if(MaximumRangeVotesForContinuation<0 || MaximumRangeVotesForContinuation>3)
-     { Print("Validation: MaximumRangeVotesForContinuation must be from 0 to 3."); return(false); }
-   if(ReversalMinimumCloseDistanceATR<0.0 ||
-      ReversalMinimumGradientImprovement<0.0 || ReversalMinimumBodyATR<0.0 ||
-      ReversalMinimumDirectionalGradient<0.0)
-     { Print("Validation: reversal thresholds cannot be negative."); return(false); }
-   if(EnableEMARetestEntry &&
-      (RetestTrendClosesRequired<2 || RetestTrendClosesRequired>10000 ||
-       RetestMinimumMoveAwayATR<0.0 ||
-       RetestTouchToleranceATR<0.0 || RetestMinimumRecoveryCloseATR<0.0 ||
-       RetestMaximumPenetrationATR<0.0 ||
-       RetestMinimumCloseLocationPercent<50.0 || RetestMinimumCloseLocationPercent>100.0 ||
-       RetestEntryBufferATR<0.0 || RetestPendingExpiryBars<1 ||
-       MaximumRetestsPerTrendLeg<1))
-     { Print("Validation: EMA retest inputs are invalid."); return(false); }
-   if(EnableEMARetestEntry && RequireServerSidePendingExpiry &&
-      PeriodSeconds(SignalTimeframe)<=0)
-     { Print("Validation: signal timeframe cannot provide a server expiry interval."); return(false); }
-   if(QuietBarsRequiredToRearm<1)
-     { Print("Validation: QuietBarsRequiredToRearm must be positive."); return(false); }
-   if(StopLossMoney<0.0 || TakeProfitMoney<0.0)
-     { Print("Validation: StopLossMoney and TakeProfitMoney cannot be negative."); return(false); }
-   if(MaximumSpreadMovement<0.0 || MaximumEntryDeviationMovement<0.0 ||
-      MaximumSlippageMovement<0.0)
-     { Print("Validation: spread, deviation, and slippage values cannot be negative."); return(false); }
-   if(EnableTrailingStop &&
-      (TrailingStartMoney<0.0 || TrailingDistanceMoney<=0.0 || TrailingStepMoney<0.0))
-     { Print("Validation: trailing start/step cannot be negative and distance must be positive."); return(false); }
-   if(EnableProfitLock &&
-      (ProfitLockTriggerMoney<=0.0 || ProfitLockMoney<0.0 ||
-       ProfitLockMoney>=ProfitLockTriggerMoney))
-     { Print("Validation: profit lock must satisfy 0 <= lock < trigger."); return(false); }
-   // Dashboard geometry is deliberately NOT validated here. v6 rejected it,
-   // and in MT4 a non-zero OnInit() return removes the expert from the chart,
-   // so shrinking the panel killed the EA. See ResolveDashboardGeometry().
-   return(true);
+   target=(int)MathMax(low,MathMin(high,requested));
+   if(target!=requested)
+      Print("XVISION EMA50 V7: ",name," ",requested," clamped to ",target,".");
+  }
+
+void ClampDouble(const string name,const double requested,const double low,
+                 const double high,double &target)
+  {
+   target=MathMax(low,MathMin(high,requested));
+   if(MathAbs(target-requested)>1.0e-12)
+      Print("XVISION EMA50 V7: ",name," ",DoubleToString(requested,4),
+            " clamped to ",DoubleToString(target,4),".");
+  }
+
+void ResolveInputs()
+  {
+   g_tradingBlocked=false;
+   g_blockReason="";
+
+   ClampInt("MagicNumber",MagicNumber,1,2147483647,g_magic);
+   ClampInt("EMA_Period",EMA_Period,2,10000,g_emaPeriod);
+   ClampInt("ATR_Period",ATR_Period,2,10000,g_atrPeriod);
+   ClampInt("GradientLookbackBars",GradientLookbackBars,1,10000,g_gradientLookback);
+   ClampInt("RangeLookbackBars",RangeLookbackBars,2,10000,g_rangeLookback);
+
+   // Coupled: the vote threshold cannot exceed the window it counts within.
+   ClampInt("RangeCrossingVoteMinimum",RangeCrossingVoteMinimum,1,
+            g_rangeLookback,g_rangeCrossVoteMin);
+   ClampInt("MaximumRangeVotesForContinuation",MaximumRangeVotesForContinuation,
+            0,3,g_maxRangeVotes);
+
+   ClampDouble("ContinuationGradientMinimum",ContinuationGradientMinimum,
+               0.0,1000.0,g_contGradientMin);
+   ClampDouble("FlatGradientThreshold",FlatGradientThreshold,0.0,1000.0,
+               g_flatGradientThreshold);
+   // An efficiency is a ratio; typing it as a percentage is the obvious slip.
+   ClampDouble("MinimumDirectionalEfficiency",MinimumDirectionalEfficiency,
+               0.0,1.0,g_minEfficiency);
+
+   ClampDouble("ReversalMinimumCloseDistanceATR",ReversalMinimumCloseDistanceATR,
+               0.0,1000.0,g_revMinCloseDistATR);
+   ClampDouble("ReversalMinimumGradientImprovement",ReversalMinimumGradientImprovement,
+               0.0,1000.0,g_revMinGradImprove);
+   ClampDouble("ReversalMinimumBodyATR",ReversalMinimumBodyATR,0.0,1000.0,
+               g_revMinBodyATR);
+   ClampDouble("ReversalMinimumDirectionalGradient",ReversalMinimumDirectionalGradient,
+               0.0,1000.0,g_revMinDirGradient);
+
+   g_enableRetest=EnableEMARetestEntry;
+   ClampInt("RetestTrendClosesRequired",RetestTrendClosesRequired,2,10000,
+            g_retestTrendCloses);
+   ClampDouble("RetestMinimumMoveAwayATR",RetestMinimumMoveAwayATR,0.0,1000.0,
+               g_retestMinMoveAwayATR);
+   ClampDouble("RetestTouchToleranceATR",RetestTouchToleranceATR,0.0,1000.0,
+               g_retestTouchTolATR);
+   ClampDouble("RetestMaximumPenetrationATR",RetestMaximumPenetrationATR,0.0,1000.0,
+               g_retestMaxPenetrationATR);
+   ClampDouble("RetestMinimumRecoveryCloseATR",RetestMinimumRecoveryCloseATR,
+               0.0,1000.0,g_retestMinRecoveryATR);
+   ClampDouble("RetestMinimumCloseLocationPercent",RetestMinimumCloseLocationPercent,
+               50.0,100.0,g_retestMinCloseLocPct);
+   ClampDouble("RetestEntryBufferATR",RetestEntryBufferATR,0.0,1000.0,
+               g_retestEntryBufferATR);
+   ClampInt("RetestPendingExpiryBars",RetestPendingExpiryBars,1,10000,
+            g_retestExpiryBars);
+   ClampInt("MaximumRetestsPerTrendLeg",MaximumRetestsPerTrendLeg,1,100,
+            g_maxRetestsPerLeg);
+
+   ClampInt("QuietBarsRequiredToRearm",QuietBarsRequiredToRearm,1,10000,
+            g_quietBarsRequired);
+
+   ClampDouble("StopLossMoney",StopLossMoney,0.0,1.0e9,g_stopLossMoney);
+   ClampDouble("TakeProfitMoney",TakeProfitMoney,0.0,1.0e9,g_takeProfitMoney);
+   ClampDouble("MaximumSpreadMovement",MaximumSpreadMovement,0.0,1.0e9,g_maxSpread);
+   ClampDouble("MaximumEntryDeviationMovement",MaximumEntryDeviationMovement,
+               0.0,1.0e9,g_maxEntryDeviation);
+   ClampDouble("MaximumSlippageMovement",MaximumSlippageMovement,0.0,1.0e9,
+               g_maxSlippage);
+
+   // Trailing with a zero distance would park the stop on the current price and
+   // close the trade immediately. There is no safe value to invent, so the
+   // feature switches itself off rather than acting on a nonsensical setting.
+   g_enableTrailing=EnableTrailingStop;
+   ClampDouble("TrailingStartMoney",TrailingStartMoney,0.0,1.0e9,g_trailStart);
+   ClampDouble("TrailingStepMoney",TrailingStepMoney,0.0,1.0e9,g_trailStep);
+   g_trailDistance=TrailingDistanceMoney;
+   if(g_enableTrailing && g_trailDistance<=0.0)
+     {
+      g_enableTrailing=false;
+      Print("XVISION EMA50 V7: TrailingDistanceMoney must be positive; "
+            "trailing stop disabled for this session. Trading continues.");
+     }
+
+   // Locking at or above the trigger can never fire. Pull the lock under the
+   // trigger rather than discarding the user's intent entirely.
+   g_enableProfitLock=EnableProfitLock;
+   ClampDouble("ProfitLockTriggerMoney",ProfitLockTriggerMoney,0.0,1.0e9,g_lockTrigger);
+   ClampDouble("ProfitLockMoney",ProfitLockMoney,0.0,1.0e9,g_lockMoney);
+   if(g_enableProfitLock && g_lockTrigger<=0.0)
+     {
+      g_enableProfitLock=false;
+      Print("XVISION EMA50 V7: ProfitLockTriggerMoney must be positive; "
+            "profit lock disabled for this session. Trading continues.");
+     }
+   else if(g_enableProfitLock && g_lockMoney>=g_lockTrigger)
+     {
+      double reduced=g_lockTrigger*0.5;
+      Print("XVISION EMA50 V7: ProfitLockMoney ",DoubleToString(g_lockMoney,2),
+            " is not below its trigger ",DoubleToString(g_lockTrigger,2),
+            "; reduced to ",DoubleToString(reduced,2),".");
+      g_lockMoney=reduced;
+     }
+
+   // Lot size is the one number the EA cannot invent on the user's behalf,
+   // but an unusable value blocks trading rather than unloading the EA.
+   g_fixedLot=FixedLotSize;
+   double probe=0.0;
+   if(g_fixedLot<=0.0 || !ResolveLotSize(g_fixedLot,probe))
+     {
+      g_tradingBlocked=true;
+      g_blockReason="FixedLotSize "+DoubleToString(FixedLotSize,4)+
+                    " is not tradeable on this symbol";
+      Print("XVISION EMA50 V7: ",g_blockReason,
+            " (min ",DoubleToString(MarketInfo(Symbol(),MODE_MINLOT),4),
+            ", step ",DoubleToString(MarketInfo(Symbol(),MODE_LOTSTEP),4),
+            "). The EA stays attached and will not trade until this is fixed.");
+     }
+
+   if(RestrictToGoldSymbols && !IsGoldSymbol())
+     {
+      g_tradingBlocked=true;
+      g_blockReason="RestrictToGoldSymbols is on and "+Symbol()+" is not a GOLD/XAU symbol";
+      Print("XVISION EMA50 V7: ",g_blockReason,
+            ". The EA stays attached and will not trade.");
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -337,10 +487,10 @@ void ProcessNewSignalBar()
 
    g_lastProcessedBar=currentBar;
 
-   int maximumShift=(int)MathMax(2+GradientLookbackBars,RangeLookbackBars+1);
-   if(EnableEMARetestEntry)
-      maximumShift=(int)MathMax(maximumShift,RetestTrendClosesRequired);
-   int minimumBars=(int)MathMax(EMA_Period+maximumShift+5,ATR_Period+maximumShift+5);
+   int maximumShift=(int)MathMax(2+g_gradientLookback,g_rangeLookback+1);
+   if(g_enableRetest)
+      maximumShift=(int)MathMax(maximumShift,g_retestTrendCloses);
+   int minimumBars=(int)MathMax(g_emaPeriod+maximumShift+5,g_atrPeriod+maximumShift+5);
    if(iBars(Symbol(),SignalTimeframe)<minimumBars)
      {
       g_lastDecision="Waiting for sufficient EMA/ATR history";
@@ -374,7 +524,7 @@ void ProcessNewSignalBar()
      {
       // v6 returned here without touching the quiet counter, so any bar that
       // consumed a retest never counted toward re-arming and the unlock took
-      // longer than QuietBarsRequiredToRearm implies. The retest message is
+      // longer than g_quietBarsRequired implies. The retest message is
       // more informative than the lock message, so keep it.
       AdvanceEpisodeLock(rawCross,false);
       SaveEpisodeState();
@@ -395,8 +545,8 @@ void ProcessNewSignalBar()
       return;
      }
 
-   double atr1=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
-   double atr2=iATR(Symbol(),SignalTimeframe,ATR_Period,2);
+   double atr1=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
+   double atr2=iATR(Symbol(),SignalTimeframe,g_atrPeriod,2);
    if(atr1<=0.0 || atr2<=0.0)
      {
       g_lastDecision="Cross rejected: ATR is unavailable";
@@ -405,9 +555,9 @@ void ProcessNewSignalBar()
      }
 
    double ema1=EMAValue(1);
-   double emaPast=EMAValue(1+GradientLookbackBars);
+   double emaPast=EMAValue(1+g_gradientLookback);
    double ema2=EMAValue(2);
-   double emaPreviousPast=EMAValue(2+GradientLookbackBars);
+   double emaPreviousPast=EMAValue(2+g_gradientLookback);
    if(ema1<=0.0 || emaPast<=0.0 || ema2<=0.0 || emaPreviousPast<=0.0)
      {
       g_lastDecision="Cross rejected: EMA history is incomplete";
@@ -424,16 +574,16 @@ void ProcessNewSignalBar()
    double gradientImprovement=g_lastDirectionalGradient-previousDirectionalGradient;
    double closeDistanceATR=direction*(close1-ema1)/atr1;
    double bodyATR=direction*(close1-open1)/atr1;
-   int crossingCount=CountRawCrossings(RangeLookbackBars);
+   int crossingCount=CountRawCrossings(g_rangeLookback);
    g_lastEfficiency=g_currentEfficiency;
    g_lastRangeVotes=g_currentRangeVotes;
 
-   bool continuation=(g_lastDirectionalGradient>=ContinuationGradientMinimum &&
-                      g_lastRangeVotes<=MaximumRangeVotesForContinuation);
-   bool reversal=(closeDistanceATR>=ReversalMinimumCloseDistanceATR &&
-                  g_lastDirectionalGradient>ReversalMinimumDirectionalGradient &&
-                  gradientImprovement>=ReversalMinimumGradientImprovement &&
-                  bodyATR>=ReversalMinimumBodyATR);
+   bool continuation=(g_lastDirectionalGradient>=g_contGradientMin &&
+                      g_lastRangeVotes<=g_maxRangeVotes);
+   bool reversal=(closeDistanceATR>=g_revMinCloseDistATR &&
+                  g_lastDirectionalGradient>g_revMinDirGradient &&
+                  gradientImprovement>=g_revMinGradImprove &&
+                  bodyATR>=g_revMinBodyATR);
 
    string route="";
    if(continuation)
@@ -517,7 +667,7 @@ void AdvanceEpisodeLock(const bool rawCross,const bool setDecision)
      }
 
    g_quietBars++;
-   if(g_quietBars>=QuietBarsRequiredToRearm && !HasEAExposure())
+   if(g_quietBars>=g_quietBarsRequired && !HasEAExposure())
      {
       g_episodeLocked=false;
       g_quietBars=0;
@@ -534,16 +684,16 @@ void AdvanceEpisodeLock(const bool rawCross,const bool setDecision)
 void UpdateCurrentDiagnostics()
   {
    g_diagnosticsValid=false;
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    if(atr<=0.0)
       return;
    double emaNow=EMAValue(1);
-   double emaPast=EMAValue(1+GradientLookbackBars);
+   double emaPast=EMAValue(1+g_gradientLookback);
    if(emaNow<=0.0 || emaPast<=0.0)
       return;
    g_currentSlope=(emaNow-emaPast)/atr;
-   g_currentEfficiency=DirectionalEfficiency(RangeLookbackBars);
-   int crossings=CountRawCrossings(RangeLookbackBars);
+   g_currentEfficiency=DirectionalEfficiency(g_rangeLookback);
+   int crossings=CountRawCrossings(g_rangeLookback);
    g_currentRangeVotes=RangeVotes(crossings,g_currentSlope,g_currentEfficiency);
    g_diagnosticsValid=true;
   }
@@ -576,7 +726,7 @@ string RetestStateName()
 //+------------------------------------------------------------------+
 bool IsCurrentRetestOrder()
   {
-   return(OrderSymbol()==Symbol() && OrderMagicNumber()==MagicNumber);
+   return(OrderSymbol()==Symbol() && OrderMagicNumber()==g_magic);
   }
 
 //+------------------------------------------------------------------+
@@ -673,7 +823,7 @@ void RecoverRetestOrderState()
 //+------------------------------------------------------------------+
 bool HasTrendCloses(const int direction)
   {
-   for(int shift=1; shift<=RetestTrendClosesRequired; shift++)
+   for(int shift=1; shift<=g_retestTrendCloses; shift++)
      {
       double closeValue=iClose(Symbol(),SignalTimeframe,shift);
       double emaValue=EMAValue(shift);
@@ -692,15 +842,15 @@ bool HasTrendCloses(const int direction)
 //+------------------------------------------------------------------+
 bool RetestTouchesBand(const int direction)
   {
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    if(atr<=0.0)
       return(false);
    double ema=EMAValue(1);
    if(ema<=0.0)
       return(false);
    if(direction>0)
-      return(iLow(Symbol(),SignalTimeframe,1)<=ema+RetestTouchToleranceATR*atr);
-   return(iHigh(Symbol(),SignalTimeframe,1)>=ema-RetestTouchToleranceATR*atr);
+      return(iLow(Symbol(),SignalTimeframe,1)<=ema+g_retestTouchTolATR*atr);
+   return(iHigh(Symbol(),SignalTimeframe,1)>=ema-g_retestTouchTolATR*atr);
   }
 
 //+------------------------------------------------------------------+
@@ -709,16 +859,16 @@ bool RetestTouchesBand(const int direction)
 bool RetestCandleQualifies(const int direction,string &reason)
   {
    reason="";
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    if(atr<=0.0)
      { reason="ATR unavailable"; return(false); }
    if(!g_diagnosticsValid)
      { reason="diagnostics are stale"; return(false); }
-   if(direction*g_currentSlope<ContinuationGradientMinimum)
+   if(direction*g_currentSlope<g_contGradientMin)
      { reason="EMA slope lost direction"; return(false); }
-   if(g_currentRangeVotes>MaximumRangeVotesForContinuation)
+   if(g_currentRangeVotes>g_maxRangeVotes)
      { reason="too many range votes"; return(false); }
-   if(g_currentEfficiency<MinimumDirectionalEfficiency)
+   if(g_currentEfficiency<g_minEfficiency)
      { reason="directional efficiency too low"; return(false); }
 
    double openValue=iOpen(Symbol(),SignalTimeframe,1);
@@ -735,9 +885,9 @@ bool RetestCandleQualifies(const int direction,string &reason)
    double recovery=direction*(closeValue-emaValue)/atr;
    double penetration=(direction>0 ? (emaValue-lowValue)/atr :
                                      (highValue-emaValue)/atr);
-   if(penetration>RetestMaximumPenetrationATR)
+   if(penetration>g_retestMaxPenetrationATR)
      { reason="EMA penetration was too deep"; return(false); }
-   if(recovery<RetestMinimumRecoveryCloseATR)
+   if(recovery<g_retestMinRecoveryATR)
      { reason="close did not recover far enough from EMA"; return(false); }
    if(RetestRequireDirectionalBody && direction*(closeValue-openValue)<=0.0)
      { reason="candle body disagreed with trend"; return(false); }
@@ -745,7 +895,7 @@ bool RetestCandleQualifies(const int direction,string &reason)
    double closeLocation=(direction>0 ?
                          (closeValue-lowValue)/candleRange*100.0 :
                          (highValue-closeValue)/candleRange*100.0);
-   if(closeLocation<RetestMinimumCloseLocationPercent)
+   if(closeLocation<g_retestMinCloseLocPct)
      { reason="close location was too weak"; return(false); }
    return(true);
   }
@@ -771,6 +921,9 @@ double NormalizeRetestEntry(const double price,const int direction)
 //+------------------------------------------------------------------+
 bool PlaceRetestPending(const int direction)
   {
+   if(g_tradingBlocked)
+     { g_lastDecision="RETEST suppressed: "+g_blockReason; return(false); }
+
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
      { g_lastDecision="RETEST rejected: trade context unavailable"; return(false); }
@@ -779,18 +932,18 @@ bool PlaceRetestPending(const int direction)
      { g_lastDecision="RETEST rejected: prices unavailable"; return(false); }
 
    double spread=MathMax(0.0,Ask-Bid);
-   if(MaximumSpreadMovement>0.0 && spread>MaximumSpreadMovement)
+   if(g_maxSpread>0.0 && spread>g_maxSpread)
      { g_lastDecision="RETEST rejected: spread too wide"; return(false); }
 
    double lots=0.0;
-   if(!ResolveLotSizeForTrade(FixedLotSize,lots))
+   if(!ResolveLotSizeForTrade(g_fixedLot,lots))
      { g_lastDecision="RETEST rejected: volume is not executable"; return(false); }
 
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    if(atr<=0.0)
      { g_lastDecision="RETEST rejected: ATR unavailable"; return(false); }
-   double rawEntry=(direction>0 ? iHigh(Symbol(),SignalTimeframe,1)+RetestEntryBufferATR*atr :
-                                  iLow(Symbol(),SignalTimeframe,1)-RetestEntryBufferATR*atr);
+   double rawEntry=(direction>0 ? iHigh(Symbol(),SignalTimeframe,1)+g_retestEntryBufferATR*atr :
+                                  iLow(Symbol(),SignalTimeframe,1)-g_retestEntryBufferATR*atr);
    double entry=NormalizeRetestEntry(rawEntry,direction);
    if(entry<=0.0)
      { g_lastDecision="RETEST rejected: invalid pending price"; return(false); }
@@ -803,13 +956,13 @@ bool PlaceRetestPending(const int direction)
    double stopLoss=0.0;
    double takeProfit=0.0;
    int marketCommand=(direction>0 ? OP_BUY : OP_SELL);
-   if(StopLossMoney>0.0 || TakeProfitMoney>0.0)
+   if(g_stopLossMoney>0.0 || g_takeProfitMoney>0.0)
      {
       double moneyPerPrice=MoneyPerPriceUnitPerLot()*lots;
       if(moneyPerPrice<=0.0)
         { g_lastDecision="RETEST rejected: tick value unavailable"; return(false); }
-      double stopDistance=(StopLossMoney>0.0 ? StopLossMoney/moneyPerPrice : 0.0);
-      double targetDistance=(TakeProfitMoney>0.0 ? TakeProfitMoney/moneyPerPrice : 0.0);
+      double stopDistance=(g_stopLossMoney>0.0 ? g_stopLossMoney/moneyPerPrice : 0.0);
+      double targetDistance=(g_takeProfitMoney>0.0 ? g_takeProfitMoney/moneyPerPrice : 0.0);
       if((stopDistance>0.0 && stopDistance<minimumDistance) ||
          (targetDistance>0.0 && targetDistance<minimumDistance))
         { g_lastDecision="RETEST rejected: SL/TP inside broker stop level"; return(false); }
@@ -846,14 +999,14 @@ bool PlaceRetestPending(const int direction)
       datetime activeBar=iTime(Symbol(),SignalTimeframe,0);
       if(timeframeSeconds<=0 || activeBar<=0)
         { g_lastDecision="RETEST rejected: server expiry time unavailable"; return(false); }
-      expiration=(datetime)(activeBar+RetestPendingExpiryBars*timeframeSeconds);
+      expiration=(datetime)(activeBar+g_retestExpiryBars*timeframeSeconds);
       if(expiration<=TimeCurrent())
         { g_lastDecision="RETEST rejected: computed server expiry is stale"; return(false); }
      }
    bool serverExpiryRequested=(expiration>0);
    ResetLastError();
    int ticket=OrderSend(Symbol(),pendingCommand,lots,entry,SlippagePoints(),
-                        stopLoss,takeProfit,orderComment,MagicNumber,expiration,
+                        stopLoss,takeProfit,orderComment,g_magic,expiration,
                         (direction>0 ? clrDodgerBlue : clrTomato));
 
    // Many brokers -- ECN/STP accounts especially -- refuse pending expiry
@@ -869,12 +1022,12 @@ bool PlaceRetestPending(const int direction)
         {
          Print("XVISION EMA50 V7: broker refused pending expiry (error=",expiryError,
                "); resending without it and expiring locally after ",
-               RetestPendingExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
+               g_retestExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
          serverExpiryRequested=false;
          expiration=0;
          ResetLastError();
          ticket=OrderSend(Symbol(),pendingCommand,lots,entry,SlippagePoints(),
-                          stopLoss,takeProfit,orderComment,MagicNumber,0,
+                          stopLoss,takeProfit,orderComment,g_magic,0,
                           (direction>0 ? clrDodgerBlue : clrTomato));
         }
      }
@@ -899,7 +1052,7 @@ bool PlaceRetestPending(const int direction)
          // rather than deleting a live stop order.
          Print("XVISION EMA50 V7: pending #",ticket," was accepted without the "
                "requested server expiry; it will be expired locally after ",
-               RetestPendingExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
+               g_retestExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
         }
      }
 
@@ -917,7 +1070,7 @@ bool PlaceRetestPending(const int direction)
    Print("XVISION EMA50 V7: retest pending ticket=",ticket,
          " direction=",DirectionName(direction),
          " entry=",DoubleToString(entry,Digits),
-         " expires after ",RetestPendingExpiryBars," ",
+         " expires after ",g_retestExpiryBars," ",
          TimeframeName(SignalTimeframe)," bars",
          " serverExpiry=",(expiration>0 ?
          TimeToString(expiration,TIME_DATE|TIME_MINUTES) : "manual-only"));
@@ -929,7 +1082,7 @@ bool PlaceRetestPending(const int direction)
 //+------------------------------------------------------------------+
 bool ProcessRetestState(const bool rawCross,const int crossDirection)
   {
-   if(!EnableEMARetestEntry)
+   if(!g_enableRetest)
      {
       g_retestState=RETEST_IDLE;
       g_retestStatus="Retest module disabled";
@@ -968,7 +1121,7 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
       g_retestState==RETEST_USED || g_retestDirection==0)
       return(false);
 
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    if(atr<=0.0)
       return(false);
    double closeValue=iClose(Symbol(),SignalTimeframe,1);
@@ -987,10 +1140,10 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
    if(g_retestState==RETEST_WAIT_MOVE)
      {
       if(HasTrendCloses(g_retestDirection) &&
-         directionalDistance>=RetestMinimumMoveAwayATR &&
-         g_retestDirection*g_currentSlope>=ContinuationGradientMinimum &&
-         g_currentRangeVotes<=MaximumRangeVotesForContinuation &&
-         g_currentEfficiency>=MinimumDirectionalEfficiency)
+         directionalDistance>=g_retestMinMoveAwayATR &&
+         g_retestDirection*g_currentSlope>=g_contGradientMin &&
+         g_currentRangeVotes<=g_maxRangeVotes &&
+         g_currentEfficiency>=g_minEfficiency)
         {
          g_retestState=RETEST_ARMED;
          g_retestStatus=DirectionName(g_retestDirection)+" retest armed; waiting for first touch";
@@ -1012,7 +1165,7 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
       return(true);
      }
 
-   if(g_retestCount>=MaximumRetestsPerTrendLeg)
+   if(g_retestCount>=g_maxRetestsPerLeg)
      {
       g_retestState=RETEST_USED;
       g_retestStatus="Retest limit already reached for this trend leg";
@@ -1052,11 +1205,11 @@ void ManageRetestOrders()
    int pendingCount=0;
    bool triggeredPositionFound=false;
    bool stateChanged=false;
-   double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
+   double atr=iATR(Symbol(),SignalTimeframe,g_atrPeriod,1);
    double closedSlope=0.0;
    bool   slopeKnown=false;
    double manageEma=EMAValue(1);
-   double manageEmaPast=EMAValue(1+GradientLookbackBars);
+   double manageEmaPast=EMAValue(1+g_gradientLookback);
    if(atr>0.0 && manageEma>0.0 && manageEmaPast>0.0)
      {
       closedSlope=(manageEma-manageEmaPast)/atr;
@@ -1084,7 +1237,7 @@ void ManageRetestOrders()
       int ageBars=iBarShift(Symbol(),SignalTimeframe,OrderOpenTime(),false);
       double closeValue=iClose(Symbol(),SignalTimeframe,1);
       double emaValue=manageEma;
-      bool barExpired=(ageBars>=RetestPendingExpiryBars);
+      bool barExpired=(ageBars>=g_retestExpiryBars);
       bool serverExpired=(OrderExpiration()>0 && TimeCurrent()>=OrderExpiration());
       bool expired=(barExpired || serverExpired);
       // Never judge the setup against an unavailable EMA -- a zero would read
@@ -1092,7 +1245,7 @@ void ManageRetestOrders()
       bool closeInvalid=(emaValue>0.0 && closeValue>0.0 &&
                          (direction>0 ? closeValue<=emaValue : closeValue>=emaValue));
       bool slopeInvalid=(slopeKnown && direction*closedSlope<=0.0);
-      bool cancel=(!EnableEMARetestEntry || expired || closeInvalid || slopeInvalid);
+      bool cancel=(!g_enableRetest || expired || closeInvalid || slopeInvalid);
       if(!cancel || !IsTradeAllowed() || IsTradeContextBusy() ||
          MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
          continue;
@@ -1104,7 +1257,7 @@ void ManageRetestOrders()
       g_lastPendingDeleteAttempt=TimeCurrent();
 
       int ticket=OrderTicket();
-      string cancelReason=(!EnableEMARetestEntry ? "module disabled" :
+      string cancelReason=(!g_enableRetest ? "module disabled" :
                            (expired ? "confirmation expired" :
                             (closeInvalid ? "EMA close invalidated" : "slope invalidated")));
       ResetLastError();
@@ -1115,7 +1268,7 @@ void ManageRetestOrders()
          pendingCount--;
          if(g_retestTicket==ticket)
             g_retestTicket=0;
-         g_retestState=(g_retestCount>=MaximumRetestsPerTrendLeg ?
+         g_retestState=(g_retestCount>=g_maxRetestsPerLeg ?
                         RETEST_USED : RETEST_WAIT_MOVE);
          g_retestStatus="Pending cancelled: "+cancelReason;
          g_lastDecision=g_retestStatus;
@@ -1139,7 +1292,7 @@ void ManageRetestOrders()
         }
       else
         {
-         g_retestState=(g_retestCount>=MaximumRetestsPerTrendLeg ?
+         g_retestState=(g_retestCount>=g_maxRetestsPerLeg ?
                         RETEST_USED : RETEST_WAIT_MOVE);
          g_retestStatus="Retest pending no longer exists";
         }
@@ -1223,11 +1376,11 @@ double DirectionalEfficiency(const int lookback)
 int RangeVotes(const int crossings,const double slope,const double efficiency)
   {
    int votes=0;
-   if(crossings>=RangeCrossingVoteMinimum)
+   if(crossings>=g_rangeCrossVoteMin)
       votes++;
-   if(MathAbs(slope)<FlatGradientThreshold)
+   if(MathAbs(slope)<g_flatGradientThreshold)
       votes++;
-   if(efficiency<MinimumDirectionalEfficiency)
+   if(efficiency<g_minEfficiency)
       votes++;
    return(votes);
   }
@@ -1237,6 +1390,12 @@ int RangeVotes(const int crossings,const double slope,const double efficiency)
 //+------------------------------------------------------------------+
 bool OpenDirectionalTrade(const int direction,const string route,const double signalClose)
   {
+   if(g_tradingBlocked)
+     {
+      Print("XVISION EMA50 V7: entry suppressed -- ",g_blockReason);
+      return(false);
+     }
+
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
      {
@@ -1249,17 +1408,17 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
       return(false);
 
    double spread=MathMax(0.0,Ask-Bid);
-   if(MaximumSpreadMovement>0.0 && spread>MaximumSpreadMovement)
+   if(g_maxSpread>0.0 && spread>g_maxSpread)
      {
        Print("XVISION EMA50 V7: entry skipped; spread ",DoubleToString(spread,Digits),
-            " exceeds ",DoubleToString(MaximumSpreadMovement,Digits));
+            " exceeds ",DoubleToString(g_maxSpread,Digits));
       return(false);
      }
 
    int command=(direction>0 ? OP_BUY : OP_SELL);
    double entry=(command==OP_BUY ? Ask : Bid);
-   if(MaximumEntryDeviationMovement>0.0 &&
-      MathAbs(entry-signalClose)>MaximumEntryDeviationMovement)
+   if(g_maxEntryDeviation>0.0 &&
+      MathAbs(entry-signalClose)>g_maxEntryDeviation)
      {
        Print("XVISION EMA50 V7: entry skipped; deviation from signal close is ",
             DoubleToString(MathAbs(entry-signalClose),Digits));
@@ -1267,12 +1426,12 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
      }
 
    double lots=0.0;
-   if(!ResolveLotSizeForTrade(FixedLotSize,lots))
+   if(!ResolveLotSizeForTrade(g_fixedLot,lots))
       return(false);
 
    double stopDistance=0.0;
    double targetDistance=0.0;
-   if(StopLossMoney>0.0 || TakeProfitMoney>0.0)
+   if(g_stopLossMoney>0.0 || g_takeProfitMoney>0.0)
      {
       double moneyPerPricePerLot=MoneyPerPriceUnitPerLot();
       if(moneyPerPricePerLot<=0.0)
@@ -1280,10 +1439,10 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
          Print("XVISION EMA50 V7: broker tick value/tick size is unavailable.");
          return(false);
         }
-      if(StopLossMoney>0.0)
-         stopDistance=StopLossMoney/(moneyPerPricePerLot*lots);
-      if(TakeProfitMoney>0.0)
-         targetDistance=TakeProfitMoney/(moneyPerPricePerLot*lots);
+      if(g_stopLossMoney>0.0)
+         stopDistance=g_stopLossMoney/(moneyPerPricePerLot*lots);
+      if(g_takeProfitMoney>0.0)
+         targetDistance=g_takeProfitMoney/(moneyPerPricePerLot*lots);
      }
 
    double minimumDistance=MarketInfo(Symbol(),MODE_STOPLEVEL)*Point;
@@ -1337,7 +1496,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    string comment=(route=="CONTINUATION" ? "XVE6_CONT" : "XVE6_REV");
    ResetLastError();
    int ticket=OrderSend(Symbol(),command,lots,entry,SlippagePoints(),
-                        stopLoss,takeProfit,comment,MagicNumber,0,
+                        stopLoss,takeProfit,comment,g_magic,0,
                         (direction>0 ? clrDodgerBlue : clrTomato));
    if(ticket<0)
      {
@@ -1397,7 +1556,7 @@ double NormalizeTargetPrice(const double price,const int orderType)
 //+------------------------------------------------------------------+
 void ManageInputProtection()
   {
-   if(!EnableTrailingStop && !EnableProfitLock)
+   if(!g_enableTrailing && !g_enableProfitLock)
       return;
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
@@ -1415,7 +1574,7 @@ void ManageInputProtection()
      {
       if(!OrderSelect(pos,SELECT_BY_POS,MODE_TRADES))
          continue;
-      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=MagicNumber)
+      if(OrderSymbol()!=Symbol() || OrderMagicNumber()!=g_magic)
          continue;
       int orderType=OrderType();
       if(orderType!=OP_BUY && orderType!=OP_SELL)
@@ -1430,16 +1589,16 @@ void ManageInputProtection()
       double candidate=0.0;
       string source="";
 
-      if(EnableProfitLock && netProfit>=ProfitLockTriggerMoney)
+      if(g_enableProfitLock && netProfit>=g_lockTrigger)
         {
-         double requiredGrossAtStop=ProfitLockMoney-carryingCosts;
+         double requiredGrossAtStop=g_lockMoney-carryingCosts;
          candidate=OrderOpenPrice()+direction*(requiredGrossAtStop/moneyPerPrice);
          source="PROFIT_LOCK";
         }
 
-      if(EnableTrailingStop && netProfit>=TrailingStartMoney)
+      if(g_enableTrailing && netProfit>=g_trailStart)
         {
-         double desiredNetAtStop=netProfit-TrailingDistanceMoney;
+         double desiredNetAtStop=netProfit-g_trailDistance;
          double requiredGrossAtStop=desiredNetAtStop-carryingCosts;
          double trailingStop=OrderOpenPrice()+direction*(requiredGrossAtStop/moneyPerPrice);
          if(candidate<=0.0 ||
@@ -1463,8 +1622,8 @@ void ManageInputProtection()
          continue;
 
       double oldStop=OrderStopLoss();
-      double stepDistance=(source=="TRAILING" && TrailingStepMoney>0.0 ?
-                           TrailingStepMoney/moneyPerPrice : 0.0);
+      double stepDistance=(source=="TRAILING" && g_trailStep>0.0 ?
+                           g_trailStep/moneyPerPrice : 0.0);
       double tickSize=MarketInfo(Symbol(),MODE_TICKSIZE);
       if(tickSize<=0.0)
          tickSize=Point;
@@ -1506,7 +1665,7 @@ bool IsXVISIONExposureSelected()
    if(OrderSymbol()!=Symbol())
       return(false);
    int magic=OrderMagicNumber();
-   if(magic==MagicNumber || magic==50503001 || magic==50503002 ||
+   if(magic==g_magic || magic==50503001 || magic==50503002 ||
       magic==50503003 || magic==50503004 || magic==50503005 ||
       magic==50503006)
       return(true);
@@ -1536,7 +1695,7 @@ bool HasEAExposure()
 //+------------------------------------------------------------------+
 double EMAValue(const int shift)
   {
-   double value=iMA(Symbol(),SignalTimeframe,EMA_Period,0,MODE_EMA,PRICE_CLOSE,shift);
+   double value=iMA(Symbol(),SignalTimeframe,g_emaPeriod,0,MODE_EMA,PRICE_CLOSE,shift);
    if(!MathIsValidNumber(value) || value<=0.0)
       return(0.0);
    return(value);
@@ -1639,9 +1798,9 @@ int LotDigits()
 
 int SlippagePoints()
   {
-   if(MaximumSlippageMovement<=0.0 || Point<=0.0)
+   if(g_maxSlippage<=0.0 || Point<=0.0)
       return(0);
-   return((int)MathCeil(MaximumSlippageMovement/Point));
+   return((int)MathCeil(g_maxSlippage/Point));
   }
 
 bool IsGoldSymbol()
@@ -1689,8 +1848,8 @@ string StateKey(const string suffix)
       symbolHash=(symbolHash*131+StringGetCharacter(symbolName,index))%2147483647;
    return("XVE6_"+IntegerToString(AccountNumber())+"_"+
           IntegerToString((int)symbolHash)+"_"+
-          IntegerToString(MagicNumber)+"_"+IntegerToString(resolvedTimeframe)+"_"+
-          IntegerToString(EMA_Period)+"_"+suffix);
+          IntegerToString(g_magic)+"_"+IntegerToString(resolvedTimeframe)+"_"+
+          IntegerToString(g_emaPeriod)+"_"+suffix);
   }
 
 bool PersistentStateEnabled()
@@ -1869,7 +2028,7 @@ string DashboardTextLimit(const string value,const int maximum=0)
 //|                                                                  |
 //| HasEAExposure() blocks on any XVISION magic (50503001-50503006) or |
 //| any "XVE" comment, but ManageInputProtection() only trails orders  |
-//| carrying THIS instance's MagicNumber. So a leftover position from  |
+//| carrying THIS instance's g_magic. So a leftover position from  |
 //| an earlier version stops new entries and is never given a         |
 //| trailing stop. Taking over another EA's orders would be worse, so  |
 //| the asymmetry stays -- but it is now reported instead of silent.   |
@@ -1890,7 +2049,7 @@ string PositionSummary(double &floatingProfit,int &foreignCount)
          continue;
       floatingProfit+=OrderProfit()+OrderSwap()+OrderCommission();
       positionCount++;
-      if(OrderMagicNumber()!=MagicNumber)
+      if(OrderMagicNumber()!=g_magic)
          foreignCount++;
       string side=(OrderType()==OP_BUY ? "BUY" : "SELL");
       if(firstPosition=="")
@@ -1954,10 +2113,10 @@ void UpdateDashboard(const bool force=false)
    int foreignPositions=0;
    string position=PositionSummary(floatingProfit,foreignPositions);
    double spread=MathMax(0.0,Ask-Bid);
-   bool spreadAllowed=(MaximumSpreadMovement<=0.0 || spread<=MaximumSpreadMovement);
+   bool spreadAllowed=(g_maxSpread<=0.0 || spread<=g_maxSpread);
    double executableLot=0.0;
-   bool lotAllowed=ResolveLotSize(FixedLotSize,executableLot);
-   bool tradingAllowed=(IsTradeAllowed() && !IsTradeContextBusy() &&
+   bool lotAllowed=ResolveLotSize(g_fixedLot,executableLot);
+   bool tradingAllowed=(!g_tradingBlocked && IsTradeAllowed() && !IsTradeContextBusy() &&
                         MarketInfo(Symbol(),MODE_TRADEALLOWED)>0.5);
    string episode=(g_episodeLocked ? "LOCKED" : "ARMED");
    string signalTime=(g_lastSignalBar>0 ?
@@ -1965,12 +2124,12 @@ void UpdateDashboard(const bool force=false)
 
    SetDashboardLabel("TITLE","XVISION  |  GOLD EMA50 EA V7",12,DashboardAccent,14);
    SetDashboardLabel("SUBTITLE",TimeframeName(SignalTimeframe)+" SIGNAL  |  EMA "+
-                     IntegerToString(EMA_Period)+"  |  CROSS + FIRST RETEST",36,DashboardText,9);
+                     IntegerToString(g_emaPeriod)+"  |  CROSS + FIRST RETEST",36,DashboardText,9);
    SetDashboardLabel("H_STATUS","STATUS",59,DashboardHeading,10);
    SetDashboardLabel("DECISION",DashboardTextLimit(g_lastDecision),77,DashboardText,11);
    SetDashboardLabel("SIGNAL","Last qualified: "+signalTime,97,DashboardText,10);
    SetDashboardLabel("LOCK","Episode: "+episode+"  |  quiet "+IntegerToString(g_quietBars)+
-                     "/"+IntegerToString(QuietBarsRequiredToRearm),115,
+                     "/"+IntegerToString(g_quietBarsRequired),115,
                      (g_episodeLocked ? clrOrange : clrLime),10);
 
    SetDashboardLabel("H_FILTERS","SIGNAL FILTERS",140,DashboardHeading,10);
@@ -1978,10 +2137,10 @@ void UpdateDashboard(const bool force=false)
                      "  |  last-cross direction  "+DoubleToString(g_lastDirectionalGradient,4),
                      158,DashboardText,10);
    SetDashboardLabel("RANGE","Current range votes  "+IntegerToString(g_currentRangeVotes)+
-                     "/3  (continuation max "+IntegerToString(MaximumRangeVotesForContinuation)+")",
+                     "/3  (continuation max "+IntegerToString(g_maxRangeVotes)+")",
                      176,DashboardText,10);
    SetDashboardLabel("EFFICIENCY","Current efficiency  "+DoubleToString(g_currentEfficiency,3)+
-                     "  (min "+DoubleToString(MinimumDirectionalEfficiency,3)+")",
+                     "  (min "+DoubleToString(g_minEfficiency,3)+")",
                      194,DashboardText,10);
 
    string retestDirection=(g_retestDirection==0 ? "NONE" : DirectionName(g_retestDirection));
@@ -1990,7 +2149,7 @@ void UpdateDashboard(const bool force=false)
    SetDashboardLabel("H_RETEST","EMA RETEST ENGINE",219,DashboardHeading,10);
    SetDashboardLabel("RETEST_STATE","State  "+RetestStateName()+"  |  direction "+
                      retestDirection+"  |  used "+IntegerToString(g_retestCount)+"/"+
-                     IntegerToString(MaximumRetestsPerTrendLeg),237,retestColor,10);
+                     IntegerToString(g_maxRetestsPerLeg),237,retestColor,10);
    SetDashboardLabel("RETEST_STATUS",DashboardTextLimit(g_retestStatus),255,retestColor,10);
 
    SetDashboardLabel("H_TRADE","POSITION / PROTECTION",280,DashboardHeading,10);
@@ -2000,34 +2159,35 @@ void UpdateDashboard(const bool force=false)
                       " UNMANAGED (other magic)" : ""),
                      298,(foreignPositions>0 ? clrOrange :
                           (floatingProfit>=0.0 ? clrLime : clrTomato)),10);
-   SetDashboardLabel("LOT","Requested lot  "+DoubleToString(FixedLotSize,LotDigits())+
+   SetDashboardLabel("LOT","Requested lot  "+DoubleToString(g_fixedLot,LotDigits())+
                      "  |  executable  "+(lotAllowed ? DoubleToString(executableLot,LotDigits()) : "REJECT"),
                      316,(lotAllowed ? clrLime : clrTomato),10);
    SetDashboardLabel("RISK","SL / TP ("+AccountCurrency()+")  "+
-                     (StopLossMoney>0.0 ? DoubleToString(StopLossMoney,2) : "OFF")+" / "+
-                     (TakeProfitMoney>0.0 ? DoubleToString(TakeProfitMoney,2) : "OFF"),
+                     (g_stopLossMoney>0.0 ? DoubleToString(g_stopLossMoney,2) : "OFF")+" / "+
+                     (g_takeProfitMoney>0.0 ? DoubleToString(g_takeProfitMoney,2) : "OFF"),
                      334,DashboardText,10);
-   SetDashboardLabel("TRAIL","Trailing  "+(EnableTrailingStop ? "ON" : "OFF")+
-                     (EnableTrailingStop ? "  start / distance / step  "+
-                      DoubleToString(TrailingStartMoney,2)+" / "+
-                      DoubleToString(TrailingDistanceMoney,2)+" / "+
-                      DoubleToString(TrailingStepMoney,2) : ""),
-                     352,(EnableTrailingStop ? clrLime : DashboardText),10);
-   SetDashboardLabel("PROFIT_LOCK","Profit lock  "+(EnableProfitLock ? "ON" : "OFF")+
-                     (EnableProfitLock ? "  trigger / lock  "+
-                      DoubleToString(ProfitLockTriggerMoney,2)+" / "+
-                      DoubleToString(ProfitLockMoney,2) : ""),
-                     370,(EnableProfitLock ? clrLime : DashboardText),10);
+   SetDashboardLabel("TRAIL","Trailing  "+(g_enableTrailing ? "ON" : "OFF")+
+                     (g_enableTrailing ? "  start / distance / step  "+
+                      DoubleToString(g_trailStart,2)+" / "+
+                      DoubleToString(g_trailDistance,2)+" / "+
+                      DoubleToString(g_trailStep,2) : ""),
+                     352,(g_enableTrailing ? clrLime : DashboardText),10);
+   SetDashboardLabel("PROFIT_LOCK","Profit lock  "+(g_enableProfitLock ? "ON" : "OFF")+
+                     (g_enableProfitLock ? "  trigger / lock  "+
+                      DoubleToString(g_lockTrigger,2)+" / "+
+                      DoubleToString(g_lockMoney,2) : ""),
+                     370,(g_enableProfitLock ? clrLime : DashboardText),10);
 
    SetDashboardLabel("H_LIVE","LIVE",395,DashboardHeading,10);
    SetDashboardLabel("MARKET","Bid / Ask  "+DoubleToString(Bid,Digits)+" / "+
                      DoubleToString(Ask,Digits)+"  |  spread "+DoubleToString(spread,Digits)+
-                     " (max "+DoubleToString(MaximumSpreadMovement,Digits)+")  "+
+                     " (max "+DoubleToString(g_maxSpread,Digits)+")  "+
                      (spreadAllowed ? "ENABLED" : "BLOCKED"),413,
                      (spreadAllowed ? clrLime : clrTomato),10);
-   SetDashboardLabel("PERMISSION","Trade permission  "+
+   SetDashboardLabel("PERMISSION",DashboardTextLimit("Trade permission  "+
                      (tradingAllowed ? "ENABLED" : "BLOCKED")+
-                     "  |  EA modifies SL only; no forced close",431,
+                     (g_tradingBlocked ? "  |  "+g_blockReason
+                                       : "  |  EA modifies SL only; no forced close")),431,
                      (tradingAllowed ? clrLime : clrTomato),10);
 
    g_panelBuilt=true;
