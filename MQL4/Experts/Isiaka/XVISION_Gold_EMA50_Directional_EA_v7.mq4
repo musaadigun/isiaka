@@ -112,6 +112,12 @@ int      g_lastRangeVotes=0;
 double   g_currentSlope=0.0;
 double   g_currentEfficiency=0.0;
 int      g_currentRangeVotes=0;
+// v6 left the three g_current* values holding the PREVIOUS bar's numbers when
+// UpdateCurrentDiagnostics() bailed out, and then gated live entries on them.
+bool     g_diagnosticsValid=false;
+// The retest pending order is tracked by ticket. v6 identified it by order
+// comment, which brokers rewrite, orphaning the order and allowing a duplicate.
+int      g_retestTicket=0;
 enum ENUM_RETEST_STATE
   {
    RETEST_IDLE=0,
@@ -339,6 +345,12 @@ void ProcessNewSignalBar()
      }
 
    UpdateCurrentDiagnostics();
+   if(!g_diagnosticsValid)
+     {
+      g_lastDecision="Waiting for usable EMA/ATR values on the signal timeframe";
+      SaveEpisodeState();
+      return;
+     }
 
    int direction=0;
    bool rawCross=ClosedBarCross(direction);
@@ -393,6 +405,12 @@ void ProcessNewSignalBar()
    double emaPast=EMAValue(1+GradientLookbackBars);
    double ema2=EMAValue(2);
    double emaPreviousPast=EMAValue(2+GradientLookbackBars);
+   if(ema1<=0.0 || emaPast<=0.0 || ema2<=0.0 || emaPreviousPast<=0.0)
+     {
+      g_lastDecision="Cross rejected: EMA history is incomplete";
+      SaveEpisodeState();
+      return;
+     }
    double close1=iClose(Symbol(),SignalTimeframe,1);
    double open1=iOpen(Symbol(),SignalTimeframe,1);
 
@@ -481,13 +499,19 @@ void ProcessNewSignalBar()
 //+------------------------------------------------------------------+
 void UpdateCurrentDiagnostics()
   {
+   g_diagnosticsValid=false;
    double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
    if(atr<=0.0)
       return;
-   g_currentSlope=(EMAValue(1)-EMAValue(1+GradientLookbackBars))/atr;
+   double emaNow=EMAValue(1);
+   double emaPast=EMAValue(1+GradientLookbackBars);
+   if(emaNow<=0.0 || emaPast<=0.0)
+      return;
+   g_currentSlope=(emaNow-emaPast)/atr;
    g_currentEfficiency=DirectionalEfficiency(RangeLookbackBars);
    int crossings=CountRawCrossings(RangeLookbackBars);
    g_currentRangeVotes=RangeVotes(crossings,g_currentSlope,g_currentEfficiency);
+   g_diagnosticsValid=true;
   }
 
 //+------------------------------------------------------------------+
@@ -505,25 +529,52 @@ string RetestStateName()
 //+------------------------------------------------------------------+
 //| Identify a V6 retest order selected in the terminal order pool. |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Identify an order belonging to this EA instance.                 |
+//|                                                                  |
+//| v6 also required OrderComment() to start with "XVE6_RET". Order  |
+//| comments are not ours to rely on -- brokers append "[sl]"/"[tp]",|
+//| and bridges replace them outright. When that happened v6 stopped |
+//| recognising its own pending order: it would not cancel it, could |
+//| not recover it after a restart, and would place a second one.    |
+//| The magic number cannot be rewritten, so it carries the identity.|
+//| The comment is still written, for humans reading the terminal.   |
+//+------------------------------------------------------------------+
 bool IsCurrentRetestOrder()
   {
-   return(OrderSymbol()==Symbol() && OrderMagicNumber()==MagicNumber &&
-          StringFind(OrderComment(),"XVE6_RET")==0);
+   return(OrderSymbol()==Symbol() && OrderMagicNumber()==MagicNumber);
   }
 
 //+------------------------------------------------------------------+
 //| A broker-side pending order takes priority over saved state.     |
+//| Prefers the tracked ticket and falls back to a scan, adopting    |
+//| whatever it finds so state survives a lost global variable.      |
 //+------------------------------------------------------------------+
 bool HasActiveRetestPending()
   {
+   if(g_retestTicket>0 &&
+      OrderSelect(g_retestTicket,SELECT_BY_TICKET,MODE_TRADES) &&
+      IsCurrentRetestOrder())
+     {
+      int trackedType=OrderType();
+      if(trackedType==OP_BUYSTOP || trackedType==OP_SELLSTOP)
+         return(true);
+     }
+
    for(int pos=OrdersTotal()-1; pos>=0; pos--)
      {
       if(!OrderSelect(pos,SELECT_BY_POS,MODE_TRADES) || !IsCurrentRetestOrder())
          continue;
       int type=OrderType();
       if(type==OP_BUYSTOP || type==OP_SELLSTOP)
+        {
+         g_retestTicket=OrderTicket();
          return(true);
+        }
      }
+
+   if(g_retestTicket>0)
+      g_retestTicket=0;
    return(false);
   }
 
@@ -535,6 +586,10 @@ void RecoverRetestOrderState()
    bool marketFound=false;
    int recoveredDirection=0;
    datetime recoveredTime=0;
+   bool pendingFound=false;
+   int pendingTicket=0;
+   int pendingDirection=0;
+   datetime pendingTime=0;
 
    for(int pos=OrdersTotal()-1; pos>=0; pos--)
      {
@@ -543,13 +598,11 @@ void RecoverRetestOrderState()
       int type=OrderType();
       if(type==OP_BUYSTOP || type==OP_SELLSTOP)
         {
-         g_retestState=RETEST_PENDING;
-         g_retestDirection=(type==OP_BUYSTOP ? 1 : -1);
-         g_retestCount=(int)MathMax(g_retestCount,1);
-         g_retestSignalBar=OrderOpenTime();
-         g_retestStatus="Recovered pending confirmation #"+
-                        IntegerToString(OrderTicket());
-         return;
+         pendingFound=true;
+         pendingTicket=OrderTicket();
+         pendingDirection=(type==OP_BUYSTOP ? 1 : -1);
+         pendingTime=OrderOpenTime();
+         continue;      // v6 returned here and never saw an open position
         }
       if(type==OP_BUY || type==OP_SELL)
         {
@@ -559,9 +612,21 @@ void RecoverRetestOrderState()
         }
      }
 
+   if(pendingFound)
+     {
+      g_retestState=RETEST_PENDING;
+      g_retestTicket=pendingTicket;
+      g_retestDirection=pendingDirection;
+      g_retestCount=(int)MathMax(g_retestCount,1);
+      g_retestSignalBar=pendingTime;
+      g_retestStatus="Recovered pending confirmation #"+IntegerToString(pendingTicket);
+      return;
+     }
+
    if(marketFound)
      {
       g_retestState=RETEST_USED;
+      g_retestTicket=0;
       g_retestDirection=recoveredDirection;
       g_retestCount=(int)MathMax(g_retestCount,1);
       g_retestSignalBar=recoveredTime;
@@ -578,6 +643,8 @@ bool HasTrendCloses(const int direction)
      {
       double closeValue=iClose(Symbol(),SignalTimeframe,shift);
       double emaValue=EMAValue(shift);
+      if(emaValue<=0.0 || closeValue<=0.0)
+         return(false);
       if(direction>0 && closeValue<=emaValue)
          return(false);
       if(direction<0 && closeValue>=emaValue)
@@ -595,6 +662,8 @@ bool RetestTouchesBand(const int direction)
    if(atr<=0.0)
       return(false);
    double ema=EMAValue(1);
+   if(ema<=0.0)
+      return(false);
    if(direction>0)
       return(iLow(Symbol(),SignalTimeframe,1)<=ema+RetestTouchToleranceATR*atr);
    return(iHigh(Symbol(),SignalTimeframe,1)>=ema-RetestTouchToleranceATR*atr);
@@ -609,6 +678,8 @@ bool RetestCandleQualifies(const int direction,string &reason)
    double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
    if(atr<=0.0)
      { reason="ATR unavailable"; return(false); }
+   if(!g_diagnosticsValid)
+     { reason="diagnostics are stale"; return(false); }
    if(direction*g_currentSlope<ContinuationGradientMinimum)
      { reason="EMA slope lost direction"; return(false); }
    if(g_currentRangeVotes>MaximumRangeVotesForContinuation)
@@ -621,6 +692,8 @@ bool RetestCandleQualifies(const int direction,string &reason)
    double lowValue=iLow(Symbol(),SignalTimeframe,1);
    double closeValue=iClose(Symbol(),SignalTimeframe,1);
    double emaValue=EMAValue(1);
+   if(emaValue<=0.0)
+     { reason="EMA unavailable"; return(false); }
    double candleRange=highValue-lowValue;
    if(candleRange<=0.0)
      { reason="zero candle range"; return(false); }
@@ -734,10 +807,35 @@ bool PlaceRetestPending(const int direction)
       if(expiration<=TimeCurrent())
         { g_lastDecision="RETEST rejected: computed server expiry is stale"; return(false); }
      }
+   bool serverExpiryRequested=(expiration>0);
    ResetLastError();
    int ticket=OrderSend(Symbol(),pendingCommand,lots,entry,SlippagePoints(),
                         stopLoss,takeProfit,orderComment,MagicNumber,expiration,
                         (direction>0 ? clrDodgerBlue : clrTomato));
+
+   // Many brokers -- ECN/STP accounts especially -- refuse pending expiry
+   // outright with error 147. v6 treated that as a hard failure and burned the
+   // trend leg, so the retest route never worked at all on those accounts.
+   // The bar-age cancel in ManageRetestOrders() already enforces the same
+   // lifetime locally, so falling back is safe rather than a loosening.
+   if(ticket<0 && serverExpiryRequested)
+     {
+      int expiryError=GetLastError();
+      if(expiryError==ERR_TRADE_EXPIRATION_DENIED ||
+         expiryError==ERR_INVALID_TRADE_PARAMETERS)
+        {
+         Print("XVISION EMA50 V7: broker refused pending expiry (error=",expiryError,
+               "); resending without it and expiring locally after ",
+               RetestPendingExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
+         serverExpiryRequested=false;
+         expiration=0;
+         ResetLastError();
+         ticket=OrderSend(Symbol(),pendingCommand,lots,entry,SlippagePoints(),
+                          stopLoss,takeProfit,orderComment,MagicNumber,0,
+                          (direction>0 ? clrDodgerBlue : clrTomato));
+        }
+     }
+
    if(ticket<0)
      {
       Print("XVISION EMA50 V7: retest pending failed error=",GetLastError(),
@@ -747,36 +845,32 @@ bool PlaceRetestPending(const int direction)
      }
 
    bool expiryVerified=true;
-   if(RequireServerSidePendingExpiry)
+   if(serverExpiryRequested)
      {
       expiryVerified=(OrderSelect(ticket,SELECT_BY_TICKET,MODE_TRADES) &&
                       OrderExpiration()>0);
       if(!expiryVerified)
         {
-         ResetLastError();
-         if(OrderDelete(ticket,clrSilver))
-           {
-            g_lastDecision="RETEST rejected: broker did not preserve server expiry";
-            Print("XVISION EMA50 V7: deleted pending #",ticket,
-                  " because server expiry was not preserved.");
-            return(false);
-           }
-         Print("XVISION EMA50 V7 CRITICAL: pending #",ticket,
-               " has no verified server expiry and deletion failed error=",GetLastError());
+         // The broker accepted the order but dropped the expiry silently, which
+         // is different from refusing it up front. Fall back to local expiry
+         // rather than deleting a live stop order.
+         Print("XVISION EMA50 V7: pending #",ticket," was accepted without the "
+               "requested server expiry; it will be expired locally after ",
+               RetestPendingExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
         }
      }
 
+   g_retestTicket=ticket;
    g_retestState=RETEST_PENDING;
    g_retestCount++;
    g_retestSignalBar=iTime(Symbol(),SignalTimeframe,1);
    g_lastSignalBar=g_retestSignalBar;
    g_episodeLocked=true;
    g_quietBars=0;
-   g_retestStatus=(expiryVerified ? DirectionName(direction)+" confirmation pending #"+
-                  IntegerToString(ticket)+" at "+DoubleToString(entry,Digits) :
-                  "CRITICAL: pending expiry unverified #"+IntegerToString(ticket));
-   g_lastDecision=(expiryVerified ? "RETEST "+DirectionName(direction)+
-                  " confirmation pending" : g_retestStatus);
+   g_retestStatus=DirectionName(direction)+" confirmation pending #"+
+                  IntegerToString(ticket)+" at "+DoubleToString(entry,Digits)+
+                  (expiryVerified ? "" : " (local expiry)");
+   g_lastDecision="RETEST "+DirectionName(direction)+" confirmation pending";
    Print("XVISION EMA50 V7: retest pending ticket=",ticket,
          " direction=",DirectionName(direction),
          " entry=",DoubleToString(entry,Digits),
@@ -825,6 +919,8 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
       return(false);
    double closeValue=iClose(Symbol(),SignalTimeframe,1);
    double emaValue=EMAValue(1);
+   if(emaValue<=0.0)
+      return(false);
    double directionalDistance=g_retestDirection*(closeValue-emaValue)/atr;
 
    if(directionalDistance<=0.0 || g_retestDirection*g_currentSlope<=0.0)
@@ -904,8 +1000,14 @@ void ManageRetestOrders()
    bool stateChanged=false;
    double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
    double closedSlope=0.0;
-   if(atr>0.0)
-      closedSlope=(EMAValue(1)-EMAValue(1+GradientLookbackBars))/atr;
+   bool   slopeKnown=false;
+   double manageEma=EMAValue(1);
+   double manageEmaPast=EMAValue(1+GradientLookbackBars);
+   if(atr>0.0 && manageEma>0.0 && manageEmaPast>0.0)
+     {
+      closedSlope=(manageEma-manageEmaPast)/atr;
+      slopeKnown=true;
+     }
 
    for(int pos=OrdersTotal()-1; pos>=0; pos--)
      {
@@ -927,12 +1029,15 @@ void ManageRetestOrders()
       int direction=(type==OP_BUYSTOP ? 1 : -1);
       int ageBars=iBarShift(Symbol(),SignalTimeframe,OrderOpenTime(),false);
       double closeValue=iClose(Symbol(),SignalTimeframe,1);
-      double emaValue=EMAValue(1);
-      bool barExpired=(ageBars>=RetestPendingExpiryBars && ageBars>=0);
+      double emaValue=manageEma;
+      bool barExpired=(ageBars>=RetestPendingExpiryBars);
       bool serverExpired=(OrderExpiration()>0 && TimeCurrent()>=OrderExpiration());
       bool expired=(barExpired || serverExpired);
-      bool closeInvalid=(direction>0 ? closeValue<=emaValue : closeValue>=emaValue);
-      bool slopeInvalid=(atr>0.0 && direction*closedSlope<=0.0);
+      // Never judge the setup against an unavailable EMA -- a zero would read
+      // as "invalidated" for sells and cancel a perfectly good pending order.
+      bool closeInvalid=(emaValue>0.0 && closeValue>0.0 &&
+                         (direction>0 ? closeValue<=emaValue : closeValue>=emaValue));
+      bool slopeInvalid=(slopeKnown && direction*closedSlope<=0.0);
       bool cancel=(!EnableEMARetestEntry || expired || closeInvalid || slopeInvalid);
       if(!cancel || !IsTradeAllowed() || IsTradeContextBusy() ||
          MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
@@ -948,6 +1053,8 @@ void ManageRetestOrders()
          Print("XVISION EMA50 V7: deleted retest pending #",ticket,
                " reason=",cancelReason);
          pendingCount--;
+         if(g_retestTicket==ticket)
+            g_retestTicket=0;
          g_retestState=(g_retestCount>=MaximumRetestsPerTrendLeg ?
                         RETEST_USED : RETEST_WAIT_MOVE);
          g_retestStatus="Pending cancelled: "+cancelReason;
@@ -1001,6 +1108,10 @@ bool ClosedBarCross(int &direction)
    double ema1=EMAValue(1);
    double ema2=EMAValue(2);
 
+   // Without this guard a zero EMA reads as a crossing on every tick.
+   if(ema1<=0.0 || ema2<=0.0 || close1<=0.0 || close2<=0.0)
+      return(false);
+
    if(close2<=ema2 && close1>ema1)
       direction=1;
    else if(close2>=ema2 && close1<ema1)
@@ -1021,6 +1132,8 @@ int CountRawCrossings(const int lookback)
       double closeOld=iClose(Symbol(),SignalTimeframe,shift+1);
       double emaNew=EMAValue(shift);
       double emaOld=EMAValue(shift+1);
+      if(emaNew<=0.0 || emaOld<=0.0)
+         continue;
       if((closeOld<=emaOld && closeNew>emaNew) ||
          (closeOld>=emaOld && closeNew<emaNew))
          count++;
@@ -1356,9 +1469,32 @@ bool HasEAExposure()
    return(false);
   }
 
+//+------------------------------------------------------------------+
+//| EMA on one bar of the signal timeframe.                          |
+//|                                                                  |
+//| iMA() returns 0.0 while history is still synchronising (it sets  |
+//| error 4066). Zero compared against a gold price always reads as  |
+//| "price is above the EMA", which fabricates a BUY crossing -- so  |
+//| a zero here must never reach a comparison. Callers check with    |
+//| EMAReady() or test the returned value before using it.          |
+//+------------------------------------------------------------------+
 double EMAValue(const int shift)
   {
-   return(iMA(Symbol(),SignalTimeframe,EMA_Period,0,MODE_EMA,PRICE_CLOSE,shift));
+   double value=iMA(Symbol(),SignalTimeframe,EMA_Period,0,MODE_EMA,PRICE_CLOSE,shift);
+   if(!MathIsValidNumber(value) || value<=0.0)
+      return(0.0);
+   return(value);
+  }
+
+//+------------------------------------------------------------------+
+//| True when every EMA value from shift 1 to deepestShift is usable.|
+//+------------------------------------------------------------------+
+bool EMAReady(const int deepestShift)
+  {
+   for(int shift=1; shift<=deepestShift; shift++)
+      if(EMAValue(shift)<=0.0)
+         return(false);
+   return(true);
   }
 
 double MoneyPerPriceUnitPerLot()
@@ -1481,6 +1617,7 @@ void DeleteEpisodeState()
    GlobalVariableDel(StateKey("RET_DIR"));
    GlobalVariableDel(StateKey("RET_COUNT"));
    GlobalVariableDel(StateKey("RET_SIGNAL"));
+   GlobalVariableDel(StateKey("RET_TICKET"));
   }
 
 void LoadEpisodeState()
@@ -1502,8 +1639,12 @@ void LoadEpisodeState()
                      (int)GlobalVariableGet(StateKey("RET_COUNT")) : 0);
       g_retestSignalBar=(GlobalVariableCheck(StateKey("RET_SIGNAL")) ?
                          (datetime)GlobalVariableGet(StateKey("RET_SIGNAL")) : 0);
+      g_retestTicket=(GlobalVariableCheck(StateKey("RET_TICKET")) ?
+                      (int)GlobalVariableGet(StateKey("RET_TICKET")) : 0);
       if(g_quietBars<0)
          g_quietBars=0;
+      if(g_retestTicket<0)
+         g_retestTicket=0;
       datetime currentBar=iTime(Symbol(),SignalTimeframe,0);
       if(currentBar>0 && g_lastProcessedBar>currentBar)
          g_lastProcessedBar=currentBar;
@@ -1515,6 +1656,7 @@ void LoadEpisodeState()
          g_retestDirection=0;
          g_retestCount=0;
          g_retestSignalBar=0;
+         g_retestTicket=0;
         }
       g_retestStatus=(g_retestState==RETEST_IDLE ?
                       "Waiting for a live EMA crossing" :
@@ -1531,6 +1673,7 @@ void LoadEpisodeState()
       g_retestDirection=0;
       g_retestCount=0;
       g_retestSignalBar=0;
+      g_retestTicket=0;
       g_retestStatus="Waiting for a live EMA crossing";
      }
   }
@@ -1547,6 +1690,7 @@ void SaveEpisodeState()
    GlobalVariableSet(StateKey("RET_DIR"),(double)g_retestDirection);
    GlobalVariableSet(StateKey("RET_COUNT"),(double)g_retestCount);
    GlobalVariableSet(StateKey("RET_SIGNAL"),(double)g_retestSignalBar);
+   GlobalVariableSet(StateKey("RET_TICKET"),(double)g_retestTicket);
    GlobalVariablesFlush();
   }
 
