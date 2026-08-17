@@ -1,9 +1,20 @@
 //+------------------------------------------------------------------+
-//|                 XVISION_Gold_EMA50_Directional_EA_v6.mq4        |
-//|  Audited M30 EMA-50 crossing and first-retest entries            |
+//|                 XVISION_Gold_EMA50_Directional_EA_v7.mq4        |
+//|  EMA-50 crossing and first-retest entries on a configurable      |
+//|  signal timeframe.                                               |
+//|                                                                  |
+//|  v7 changes from v6:                                             |
+//|   - Cosmetic inputs are clamped instead of unloading the EA.     |
+//|     v6 returned INIT_PARAMETERS_INCORRECT for a dashboard that   |
+//|     was merely small, which MT4 answers by removing the expert   |
+//|     from the chart.                                              |
+//|   - The dashboard no longer rewrites every object property on    |
+//|     every tick, and only redraws when something actually         |
+//|     changed.                                                     |
+//|   - The panel layout scales with the font size.                  |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "6.00"
+#property version   "7.00"
 #property description "Directional Gold EMA-50 EA with normalized gradient, range voting,"
 #property description "crossing/reversal routes, EMA retest confirmation, and input protection."
 
@@ -82,6 +93,7 @@ input int                DashboardY                          = 24;
 input int                DashboardWidth                      = 430;
 input int                DashboardHeight                     = 472;
 input int                DashboardFontSize                   = 10;
+input int                DashboardRefreshMs                  = 250; // 0 = every tick
 input color              DashboardBackground                = C'8,14,25';
 input color              DashboardBorder                    = C'66,82,105';
 input color              DashboardText                      = clrWhite;
@@ -117,6 +129,20 @@ string   g_retestStatus="Waiting for a live EMA crossing";
 string   g_dashboardPrefix="XVE6_PANEL_";
 datetime g_lastManagementErrorPrint=0;
 
+// Resolved (clamped) dashboard geometry. The inputs themselves are read-only,
+// and a cosmetic value must never be able to unload a trading EA, so every
+// panel dimension is validated into these instead of rejected.
+int      g_panelX=12;
+int      g_panelY=24;
+int      g_panelWidth=430;
+int      g_panelHeight=472;
+int      g_panelFont=10;
+double   g_panelScale=1.0;      // v6's layout was hand-placed for font size 10
+int      g_panelRefreshMs=250;
+uint     g_lastPanelRefresh=0;
+bool     g_panelBuilt=false;
+bool     g_panelChanged=false;
+
 //+------------------------------------------------------------------+
 //| Initialization.                                                  |
 //+------------------------------------------------------------------+
@@ -125,9 +151,12 @@ int OnInit()
    if(!ValidateInputs())
       return(INIT_PARAMETERS_INCORRECT);
 
+   ResolveDashboardGeometry();
+   g_panelBuilt=false;
+
    if(RestrictToGoldSymbols && !IsGoldSymbol())
      {
-      Print("XVISION EMA50 V6: attach this EA to a GOLD/XAU symbol.");
+      Print("XVISION EMA50 V7: attach this EA to a GOLD/XAU symbol.");
       return(INIT_FAILED);
      }
 
@@ -137,8 +166,8 @@ int OnInit()
       g_episodeLocked=true;
    SaveEpisodeState();
 
-   UpdateDashboard();
-   Print("XVISION EMA50 V6 initialized on ",Symbol(),
+   UpdateDashboard(true);
+   Print("XVISION EMA50 V7 initialized on ",Symbol(),
          " timeframe=",TimeframeName(SignalTimeframe),
          " locked=",BoolText(g_episodeLocked),
          " quietBars=",g_quietBars);
@@ -215,10 +244,47 @@ bool ValidateInputs()
       (ProfitLockTriggerMoney<=0.0 || ProfitLockMoney<0.0 ||
        ProfitLockMoney>=ProfitLockTriggerMoney))
      { Print("Validation: profit lock must satisfy 0 <= lock < trigger."); return(false); }
-   if(DashboardX<0 || DashboardY<0 || DashboardWidth<360 || DashboardHeight<450 ||
-      DashboardFontSize<8)
-     { Print("Validation: dashboard position, size, or font is invalid."); return(false); }
+   // Dashboard geometry is deliberately NOT validated here. v6 rejected it,
+   // and in MT4 a non-zero OnInit() return removes the expert from the chart,
+   // so shrinking the panel killed the EA. See ResolveDashboardGeometry().
    return(true);
+  }
+
+//+------------------------------------------------------------------+
+//| Clamp the cosmetic inputs into usable values and report any      |
+//| adjustment. Never fails: a panel setting cannot stop trading.    |
+//+------------------------------------------------------------------+
+void ResolveDashboardGeometry()
+  {
+   g_panelFont  =(int)MathMax(6,MathMin(24,DashboardFontSize));
+   g_panelScale =g_panelFont/10.0;
+   g_panelX     =(int)MathMax(0,DashboardX);
+   g_panelY     =(int)MathMax(0,DashboardY);
+
+   // The tallest hand-placed row sits at y=431; leave room for it plus padding.
+   int requiredHeight=PanelRow(431)+g_panelFont*2+16;
+   int requiredWidth =(int)MathMax(200,PanelRow(200));
+
+   g_panelWidth =(int)MathMax(requiredWidth,DashboardWidth);
+   g_panelHeight=(int)MathMax(requiredHeight,DashboardHeight);
+   g_panelRefreshMs=(int)MathMax(0,MathMin(5000,DashboardRefreshMs));
+
+   if(g_panelFont!=DashboardFontSize || g_panelX!=DashboardX ||
+      g_panelY!=DashboardY || g_panelWidth!=DashboardWidth ||
+      g_panelHeight!=DashboardHeight || g_panelRefreshMs!=DashboardRefreshMs)
+      Print("XVISION EMA50 V7: dashboard settings clamped to x=",g_panelX,
+            " y=",g_panelY," w=",g_panelWidth," h=",g_panelHeight,
+            " font=",g_panelFont," refresh=",g_panelRefreshMs,"ms",
+            " (requested w=",DashboardWidth," h=",DashboardHeight,
+            " font=",DashboardFontSize,"). Trading is unaffected.");
+  }
+
+//+------------------------------------------------------------------+
+//| Scale a row offset from v6's font-10 layout to the chosen font.  |
+//+------------------------------------------------------------------+
+int PanelRow(const int baseY)
+  {
+   return((int)MathRound(baseY*g_panelScale));
   }
 
 //+------------------------------------------------------------------+
@@ -356,7 +422,7 @@ void ProcessNewSignalBar()
 
    if(PrintSignalDiagnostics)
      {
-       Print("XVISION EMA50 V6 cross ",DirectionName(direction),
+       Print("XVISION EMA50 V7 cross ",DirectionName(direction),
             " time=",TimeToString(iTime(Symbol(),SignalTimeframe,1),TIME_DATE|TIME_MINUTES),
             " gradient=",DoubleToString(g_lastDirectionalGradient,4),
             " improvement=",DoubleToString(gradientImprovement,4),
@@ -674,7 +740,7 @@ bool PlaceRetestPending(const int direction)
                         (direction>0 ? clrDodgerBlue : clrTomato));
    if(ticket<0)
      {
-      Print("XVISION EMA50 V6: retest pending failed error=",GetLastError(),
+      Print("XVISION EMA50 V7: retest pending failed error=",GetLastError(),
             " entry=",DoubleToString(entry,Digits));
       g_lastDecision="RETEST qualified; pending order failed";
       return(false);
@@ -691,11 +757,11 @@ bool PlaceRetestPending(const int direction)
          if(OrderDelete(ticket,clrSilver))
            {
             g_lastDecision="RETEST rejected: broker did not preserve server expiry";
-            Print("XVISION EMA50 V6: deleted pending #",ticket,
+            Print("XVISION EMA50 V7: deleted pending #",ticket,
                   " because server expiry was not preserved.");
             return(false);
            }
-         Print("XVISION EMA50 V6 CRITICAL: pending #",ticket,
+         Print("XVISION EMA50 V7 CRITICAL: pending #",ticket,
                " has no verified server expiry and deletion failed error=",GetLastError());
         }
      }
@@ -711,7 +777,7 @@ bool PlaceRetestPending(const int direction)
                   "CRITICAL: pending expiry unverified #"+IntegerToString(ticket));
    g_lastDecision=(expiryVerified ? "RETEST "+DirectionName(direction)+
                   " confirmation pending" : g_retestStatus);
-   Print("XVISION EMA50 V6: retest pending ticket=",ticket,
+   Print("XVISION EMA50 V7: retest pending ticket=",ticket,
          " direction=",DirectionName(direction),
          " entry=",DoubleToString(entry,Digits),
          " expires after ",RetestPendingExpiryBars," ",
@@ -879,7 +945,7 @@ void ManageRetestOrders()
       ResetLastError();
       if(OrderDelete(ticket,clrSilver))
         {
-         Print("XVISION EMA50 V6: deleted retest pending #",ticket,
+         Print("XVISION EMA50 V7: deleted retest pending #",ticket,
                " reason=",cancelReason);
          pendingCount--;
          g_retestState=(g_retestCount>=MaximumRetestsPerTrendLeg ?
@@ -890,7 +956,7 @@ void ManageRetestOrders()
         }
       else if(TimeCurrent()-g_lastManagementErrorPrint>=30)
         {
-         Print("XVISION EMA50 V6: pending deletion failed #",ticket,
+         Print("XVISION EMA50 V7: pending deletion failed #",ticket,
                " error=",GetLastError());
          g_lastManagementErrorPrint=TimeCurrent();
         }
@@ -1001,7 +1067,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
      {
-       Print("XVISION EMA50 V6: trade context is not available.");
+       Print("XVISION EMA50 V7: trade context is not available.");
       return(false);
      }
 
@@ -1012,7 +1078,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    double spread=MathMax(0.0,Ask-Bid);
    if(MaximumSpreadMovement>0.0 && spread>MaximumSpreadMovement)
      {
-       Print("XVISION EMA50 V6: entry skipped; spread ",DoubleToString(spread,Digits),
+       Print("XVISION EMA50 V7: entry skipped; spread ",DoubleToString(spread,Digits),
             " exceeds ",DoubleToString(MaximumSpreadMovement,Digits));
       return(false);
      }
@@ -1022,7 +1088,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if(MaximumEntryDeviationMovement>0.0 &&
       MathAbs(entry-signalClose)>MaximumEntryDeviationMovement)
      {
-       Print("XVISION EMA50 V6: entry skipped; deviation from signal close is ",
+       Print("XVISION EMA50 V7: entry skipped; deviation from signal close is ",
             DoubleToString(MathAbs(entry-signalClose),Digits));
       return(false);
      }
@@ -1030,7 +1096,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    double lots=0.0;
    if(!ExactLotSize(FixedLotSize,lots))
      {
-      Print("XVISION EMA50 V6: exact requested lot ",
+      Print("XVISION EMA50 V7: exact requested lot ",
             DoubleToString(FixedLotSize,8)," is not executable; trade rejected.");
       return(false);
      }
@@ -1042,7 +1108,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
       double moneyPerPricePerLot=MoneyPerPriceUnitPerLot();
       if(moneyPerPricePerLot<=0.0)
         {
-         Print("XVISION EMA50 V6: broker tick value/tick size is unavailable.");
+         Print("XVISION EMA50 V7: broker tick value/tick size is unavailable.");
          return(false);
         }
       if(StopLossMoney>0.0)
@@ -1055,7 +1121,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if((stopDistance>0.0 && stopDistance<minimumDistance) ||
       (targetDistance>0.0 && targetDistance<minimumDistance))
      {
-      Print("XVISION EMA50 V6: requested SL/TP is inside the broker stop level.");
+      Print("XVISION EMA50 V7: requested SL/TP is inside the broker stop level.");
       return(false);
      }
 
@@ -1070,14 +1136,14 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if((stopDistance>0.0 && stopLoss<=0.0) ||
       (targetDistance>0.0 && takeProfit<=0.0))
      {
-      Print("XVISION EMA50 V6: protected price normalization failed.");
+      Print("XVISION EMA50 V7: protected price normalization failed.");
       return(false);
      }
    entry=NormalizeDouble(entry,Digits);
    if((stopLoss>0.0 && MathAbs(entry-stopLoss)+Point*0.1<minimumDistance) ||
       (takeProfit>0.0 && MathAbs(takeProfit-entry)+Point*0.1<minimumDistance))
      {
-      Print("XVISION EMA50 V6: tick rounding breached the broker stop level.");
+      Print("XVISION EMA50 V7: tick rounding breached the broker stop level.");
       return(false);
      }
    bool marketLevelsInvalid=
@@ -1089,13 +1155,13 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
         (takeProfit>0.0 && takeProfit>Ask-minimumDistance)));
    if(marketLevelsInvalid)
      {
-      Print("XVISION EMA50 V6: requested protection is too close to the executable market side.");
+      Print("XVISION EMA50 V7: requested protection is too close to the executable market side.");
       return(false);
      }
 
    if(AccountFreeMarginCheck(Symbol(),command,lots)<=0.0)
      {
-      Print("XVISION EMA50 V6: insufficient free margin.");
+      Print("XVISION EMA50 V7: insufficient free margin.");
       return(false);
      }
 
@@ -1107,7 +1173,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if(ticket<0)
      {
       int error=GetLastError();
-      Print("XVISION EMA50 V6: OrderSend failed error=",error,
+      Print("XVISION EMA50 V7: OrderSend failed error=",error,
             " direction=",DirectionName(direction),
             " entry=",DoubleToString(entry,Digits),
             " SL=",DoubleToString(stopLoss,Digits),
@@ -1115,7 +1181,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
       return(false);
      }
 
-   Print("XVISION EMA50 V6: opened ticket=",ticket,
+   Print("XVISION EMA50 V7: opened ticket=",ticket,
          " route=",route,
          " direction=",DirectionName(direction),
          " lots=",DoubleToString(lots,LotDigits()),
@@ -1246,7 +1312,7 @@ void ManageInputProtection()
       ResetLastError();
       if(OrderModify(ticket,OrderOpenPrice(),candidate,OrderTakeProfit(),0,clrGold))
         {
-         Print("XVISION EMA50 V6: ",source," moved ticket=",ticket,
+         Print("XVISION EMA50 V7: ",source," moved ticket=",ticket,
                " SL to ",DoubleToString(candidate,Digits),
                " at net profit ",DoubleToString(netProfit,2)," ",AccountCurrency());
         }
@@ -1255,7 +1321,7 @@ void ManageInputProtection()
          int error=GetLastError();
          if(TimeCurrent()-g_lastManagementErrorPrint>=30)
            {
-            Print("XVISION EMA50 V6: protection modification failed ticket=",ticket,
+            Print("XVISION EMA50 V7: protection modification failed ticket=",ticket,
                   " error=",error," requested SL=",DoubleToString(candidate,Digits));
             g_lastManagementErrorPrint=TimeCurrent();
            }
@@ -1492,34 +1558,74 @@ void DeleteDashboard()
       if(StringFind(name,g_dashboardPrefix)==0)
          ObjectDelete(0,name);
      }
+   g_panelBuilt=false;
   }
 
-void SetDashboardLabel(const string id,const string value,const int y,
+//+------------------------------------------------------------------+
+//| Create the label once, then touch only what changed.             |
+//| Returns true when this call actually altered the chart, so the   |
+//| caller can decide whether a redraw is warranted at all.          |
+//+------------------------------------------------------------------+
+bool SetDashboardLabel(const string id,const string value,const int y,
                        const color textColor,const int fontSize=0)
   {
    string name=g_dashboardPrefix+id;
+   bool   rebuild=!g_panelBuilt;
+
    if(ObjectFind(0,name)<0)
-      ObjectCreate(0,name,OBJ_LABEL,0,0,0);
-   ObjectSetInteger(0,name,OBJPROP_CORNER,DashboardCorner);
-   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,DashboardX+16);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,DashboardY+y);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
-   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,(fontSize>0 ? fontSize : DashboardFontSize));
-   ObjectSetInteger(0,name,OBJPROP_ANCHOR,ANCHOR_LEFT_UPPER);
-   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
-   ObjectSetInteger(0,name,OBJPROP_SELECTED,false);
-   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
-   ObjectSetInteger(0,name,OBJPROP_BACK,false);
-   ObjectSetInteger(0,name,OBJPROP_ZORDER,101);
-   ObjectSetString(0,name,OBJPROP_FONT,"Arial");
-   ObjectSetString(0,name,OBJPROP_TEXT,value);
+     {
+      if(!ObjectCreate(0,name,OBJ_LABEL,0,0,0))
+         return(false);
+      rebuild=true;
+     }
+
+   // Geometry and style are static between re-initializations, so they are
+   // applied on creation and after a geometry change -- not on every tick.
+   if(rebuild)
+     {
+      int resolvedFont=(fontSize>0 ? (int)MathRound(fontSize*g_panelScale) : g_panelFont);
+      resolvedFont=(int)MathMax(6,resolvedFont);
+      ObjectSetInteger(0,name,OBJPROP_CORNER,DashboardCorner);
+      ObjectSetInteger(0,name,OBJPROP_XDISTANCE,g_panelX+16);
+      ObjectSetInteger(0,name,OBJPROP_YDISTANCE,g_panelY+PanelRow(y));
+      ObjectSetInteger(0,name,OBJPROP_FONTSIZE,resolvedFont);
+      ObjectSetInteger(0,name,OBJPROP_ANCHOR,ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,name,OBJPROP_SELECTED,false);
+      ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+      ObjectSetInteger(0,name,OBJPROP_BACK,false);
+      ObjectSetInteger(0,name,OBJPROP_ZORDER,101);
+      ObjectSetString(0,name,OBJPROP_FONT,"Arial");
+     }
+
+   bool changed=rebuild;
+   if(ObjectGetString(0,name,OBJPROP_TEXT)!=value)
+     {
+      ObjectSetString(0,name,OBJPROP_TEXT,value);
+      changed=true;
+     }
+   if((color)ObjectGetInteger(0,name,OBJPROP_COLOR)!=textColor)
+     {
+      ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
+      changed=true;
+     }
+   if(changed)
+      g_panelChanged=true;
+   return(changed);
   }
 
-string DashboardTextLimit(const string value,const int maximum=57)
+//+------------------------------------------------------------------+
+//| Character budget for one row, derived from the resolved panel    |
+//| width and font rather than a fixed 57 that assumed both.         |
+//+------------------------------------------------------------------+
+string DashboardTextLimit(const string value,const int maximum=0)
   {
-   if(StringLen(value)<=maximum)
+   int budget=maximum;
+   if(budget<=0)
+      budget=(int)MathMax(12,(g_panelWidth-32)/MathMax(1.0,g_panelFont*0.62));
+   if(StringLen(value)<=budget)
       return(value);
-   return(StringSubstr(value,0,maximum-3)+"...");
+   return(StringSubstr(value,0,budget-3)+"...");
   }
 
 string PositionSummary(double &floatingProfit)
@@ -1549,32 +1655,50 @@ string PositionSummary(double &floatingProfit)
    return("MULTIPLE x"+IntegerToString(positionCount));
   }
 
-void UpdateDashboard()
+void UpdateDashboard(const bool force=false)
   {
    if(!ShowDashboard)
      {
-      DeleteDashboard();
+      if(g_panelBuilt)
+         DeleteDashboard();          // once, not on every tick
       return;
      }
 
+   // A non-visual backtest has no chart to draw on; drawing there is pure cost.
+   if(IsTesting() && !IsVisualMode())
+      return;
+
+   if(!force && g_panelRefreshMs>0 &&
+      (uint)(GetTickCount()-g_lastPanelRefresh)<(uint)g_panelRefreshMs)
+      return;
+   g_lastPanelRefresh=GetTickCount();
+   g_panelChanged=false;
+
    string background=g_dashboardPrefix+"BACKGROUND";
    if(ObjectFind(0,background)<0)
+     {
       ObjectCreate(0,background,OBJ_RECTANGLE_LABEL,0,0,0);
-   ObjectSetInteger(0,background,OBJPROP_CORNER,DashboardCorner);
-   ObjectSetInteger(0,background,OBJPROP_XDISTANCE,DashboardX);
-   ObjectSetInteger(0,background,OBJPROP_YDISTANCE,DashboardY);
-   ObjectSetInteger(0,background,OBJPROP_XSIZE,DashboardWidth);
-   ObjectSetInteger(0,background,OBJPROP_YSIZE,DashboardHeight);
-   ObjectSetInteger(0,background,OBJPROP_BGCOLOR,DashboardBackground);
-   ObjectSetInteger(0,background,OBJPROP_COLOR,DashboardBorder);
-   ObjectSetInteger(0,background,OBJPROP_BORDER_TYPE,BORDER_FLAT);
-   ObjectSetInteger(0,background,OBJPROP_STYLE,STYLE_SOLID);
-   ObjectSetInteger(0,background,OBJPROP_WIDTH,1);
-   ObjectSetInteger(0,background,OBJPROP_BACK,false);
-   ObjectSetInteger(0,background,OBJPROP_SELECTABLE,false);
-   ObjectSetInteger(0,background,OBJPROP_SELECTED,false);
-   ObjectSetInteger(0,background,OBJPROP_HIDDEN,true);
-   ObjectSetInteger(0,background,OBJPROP_ZORDER,100);
+      g_panelBuilt=false;
+     }
+   if(!g_panelBuilt)
+     {
+      ObjectSetInteger(0,background,OBJPROP_CORNER,DashboardCorner);
+      ObjectSetInteger(0,background,OBJPROP_XDISTANCE,g_panelX);
+      ObjectSetInteger(0,background,OBJPROP_YDISTANCE,g_panelY);
+      ObjectSetInteger(0,background,OBJPROP_XSIZE,g_panelWidth);
+      ObjectSetInteger(0,background,OBJPROP_YSIZE,g_panelHeight);
+      ObjectSetInteger(0,background,OBJPROP_BGCOLOR,DashboardBackground);
+      ObjectSetInteger(0,background,OBJPROP_COLOR,DashboardBorder);
+      ObjectSetInteger(0,background,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+      ObjectSetInteger(0,background,OBJPROP_STYLE,STYLE_SOLID);
+      ObjectSetInteger(0,background,OBJPROP_WIDTH,1);
+      ObjectSetInteger(0,background,OBJPROP_BACK,false);
+      ObjectSetInteger(0,background,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,background,OBJPROP_SELECTED,false);
+      ObjectSetInteger(0,background,OBJPROP_HIDDEN,true);
+      ObjectSetInteger(0,background,OBJPROP_ZORDER,100);
+      g_panelChanged=true;
+     }
 
    RefreshRates();
    double floatingProfit=0.0;
@@ -1589,7 +1713,7 @@ void UpdateDashboard()
    string signalTime=(g_lastSignalBar>0 ?
                       TimeToString(g_lastSignalBar,TIME_DATE|TIME_MINUTES) : "none");
 
-   SetDashboardLabel("TITLE","XVISION  |  GOLD EMA50 EA V6",12,DashboardAccent,14);
+   SetDashboardLabel("TITLE","XVISION  |  GOLD EMA50 EA V7",12,DashboardAccent,14);
    SetDashboardLabel("SUBTITLE",TimeframeName(SignalTimeframe)+" SIGNAL  |  EMA "+
                      IntegerToString(EMA_Period)+"  |  CROSS + FIRST RETEST",36,DashboardText,9);
    SetDashboardLabel("H_STATUS","STATUS",59,DashboardHeading,10);
@@ -1652,6 +1776,9 @@ void UpdateDashboard()
                      (tradingAllowed ? "ENABLED" : "BLOCKED")+
                      "  |  EA modifies SL only; no forced close",431,
                      (tradingAllowed ? clrLime : clrTomato),10);
-   ChartRedraw();
+
+   g_panelBuilt=true;
+   if(g_panelChanged)
+      ChartRedraw();          // only when the panel actually changed
   }
 //+------------------------------------------------------------------+
