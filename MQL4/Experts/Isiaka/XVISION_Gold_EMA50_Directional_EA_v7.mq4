@@ -72,7 +72,9 @@ input bool               ResetPersistentStateOnInit          = false;
 input double             StopLossMoney                        = 5.00;
 input double             TakeProfitMoney                      = 5.00;
 input double             MaximumSpreadMovement               = 0.20;
-input double             MaximumEntryDeviationMovement       = 0.50; // 0 disables
+// Gold routinely travels more than $0.50 between a signal candle's close and the
+// next tick, so v6's 0.50 silently rejected a large share of qualified signals.
+input double             MaximumEntryDeviationMovement       = 2.00; // 0 disables
 input double             MaximumSlippageMovement             = 0.50;
 
 // Optional post-entry management in account currency.
@@ -134,6 +136,8 @@ datetime g_retestSignalBar=0;
 string   g_retestStatus="Waiting for a live EMA crossing";
 string   g_dashboardPrefix="XVE6_PANEL_";
 datetime g_lastManagementErrorPrint=0;
+#define PENDING_DELETE_RETRY_SECONDS 5
+datetime g_lastPendingDeleteAttempt=0;
 
 // Resolved (clamped) dashboard geometry. The inputs themselves are read-only,
 // and a cosmetic value must never be able to unload a trading EA, so every
@@ -344,6 +348,16 @@ void ProcessNewSignalBar()
       return;
      }
 
+   // Bar count being sufficient does not mean iMA() is returning values yet;
+   // mid-synchronisation it still hands back 0.0, which is exactly the state a
+   // chart is in right after a re-initialization.
+   if(!EMAReady(maximumShift+1))
+     {
+      g_lastDecision="Waiting for the EMA to finish loading on the signal timeframe";
+      SaveEpisodeState();
+      return;
+     }
+
    UpdateCurrentDiagnostics();
    if(!g_diagnosticsValid)
      {
@@ -358,29 +372,18 @@ void ProcessNewSignalBar()
    bool retestConsumed=ProcessRetestState(rawCross,direction);
    if(retestConsumed)
      {
+      // v6 returned here without touching the quiet counter, so any bar that
+      // consumed a retest never counted toward re-arming and the unlock took
+      // longer than QuietBarsRequiredToRearm implies. The retest message is
+      // more informative than the lock message, so keep it.
+      AdvanceEpisodeLock(rawCross,false);
       SaveEpisodeState();
       return;
      }
 
    if(g_episodeLocked)
      {
-      if(rawCross)
-        {
-         g_quietBars=0;
-         g_lastDecision="LOCKED: raw crossing restarted the quiet counter";
-        }
-      else
-        {
-         g_quietBars++;
-         if(g_quietBars>=QuietBarsRequiredToRearm && !HasEAExposure())
-           {
-            g_episodeLocked=false;
-            g_quietBars=0;
-            g_lastDecision="Episode reset completed; waiting for a new crossing";
-           }
-         else
-            g_lastDecision="LOCKED: waiting for quiet candles and closed exposure";
-        }
+      AdvanceEpisodeLock(rawCross,true);
       SaveEpisodeState();
       return;
      }
@@ -492,6 +495,37 @@ void ProcessNewSignalBar()
       g_lastDecision=route+" qualified; execution blocked or failed";
 
    SaveEpisodeState();
+  }
+
+//+------------------------------------------------------------------+
+//| Advance the crossing-episode lock by one completed candle.        |
+//|                                                                  |
+//| setDecision is false when the caller has already written a more   |
+//| specific g_lastDecision that should not be overwritten.          |
+//+------------------------------------------------------------------+
+void AdvanceEpisodeLock(const bool rawCross,const bool setDecision)
+  {
+   if(!g_episodeLocked)
+      return;
+
+   if(rawCross)
+     {
+      g_quietBars=0;
+      if(setDecision)
+         g_lastDecision="LOCKED: raw crossing restarted the quiet counter";
+      return;
+     }
+
+   g_quietBars++;
+   if(g_quietBars>=QuietBarsRequiredToRearm && !HasEAExposure())
+     {
+      g_episodeLocked=false;
+      g_quietBars=0;
+      if(setDecision)
+         g_lastDecision="Episode reset completed; waiting for a new crossing";
+     }
+   else if(setDecision)
+      g_lastDecision="LOCKED: waiting for quiet candles and closed exposure";
   }
 
 //+------------------------------------------------------------------+
@@ -749,8 +783,8 @@ bool PlaceRetestPending(const int direction)
      { g_lastDecision="RETEST rejected: spread too wide"; return(false); }
 
    double lots=0.0;
-   if(!ExactLotSize(FixedLotSize,lots))
-     { g_lastDecision="RETEST rejected: exact lot is not executable"; return(false); }
+   if(!ResolveLotSizeForTrade(FixedLotSize,lots))
+     { g_lastDecision="RETEST rejected: volume is not executable"; return(false); }
 
    double atr=iATR(Symbol(),SignalTimeframe,ATR_Period,1);
    if(atr<=0.0)
@@ -791,8 +825,17 @@ bool PlaceRetestPending(const int direction)
         { g_lastDecision="RETEST rejected: tick rounding breached broker stop level"; return(false); }
      }
 
+   // A pending order consumes no margin until it triggers, and margin at that
+   // future moment is what decides the fill. v6 rejected the placement using a
+   // MARKET order check, which blocked valid pendings whenever margin was tight.
+   // Warn and let the broker enforce margin on trigger instead.
    if(AccountFreeMarginCheck(Symbol(),marketCommand,lots)<=0.0)
-     { g_lastDecision="RETEST rejected: insufficient free margin"; return(false); }
+     {
+      ResetLastError();
+      Print("XVISION EMA50 V7: free margin would not support ",
+            DoubleToString(lots,LotDigits())," lots right now; placing the pending "
+            "anyway since margin is only required if it triggers.");
+     }
 
    int pendingCommand=(direction>0 ? OP_BUYSTOP : OP_SELLSTOP);
    string orderComment=(direction>0 ? "XVE6_RET_BUY" : "XVE6_RET_SELL");
@@ -907,6 +950,17 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
       g_retestCount=0;
       g_retestSignalBar=0;
       g_retestStatus="New "+DirectionName(crossDirection)+" leg; waiting for move-away";
+      return(false);
+     }
+
+   // v6 advanced -- and could fire -- the retest sequence while the episode was
+   // locked, because ProcessRetestState() runs before the lock check in
+   // ProcessNewSignalBar(). A leg whose crossing was never traded or even
+   // assessed could therefore still produce an entry once the lock cleared.
+   // A raw cross above still resets the leg; only the advance is paused.
+   if(g_episodeLocked)
+     {
+      g_retestStatus="Retest paused: episode is locked";
       return(false);
      }
 
@@ -1042,6 +1096,12 @@ void ManageRetestOrders()
       if(!cancel || !IsTradeAllowed() || IsTradeContextBusy() ||
          MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
          continue;
+
+      // v6 throttled only the error message, so a pending sitting inside the
+      // broker's freeze level was hammered with OrderDelete on every tick.
+      if(TimeCurrent()-g_lastPendingDeleteAttempt<PENDING_DELETE_RETRY_SECONDS)
+         continue;
+      g_lastPendingDeleteAttempt=TimeCurrent();
 
       int ticket=OrderTicket();
       string cancelReason=(!EnableEMARetestEntry ? "module disabled" :
@@ -1207,12 +1267,8 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
      }
 
    double lots=0.0;
-   if(!ExactLotSize(FixedLotSize,lots))
-     {
-      Print("XVISION EMA50 V7: exact requested lot ",
-            DoubleToString(FixedLotSize,8)," is not executable; trade rejected.");
+   if(!ResolveLotSizeForTrade(FixedLotSize,lots))
       return(false);
-     }
 
    double stopDistance=0.0;
    double targetDistance=0.0;
@@ -1506,24 +1562,59 @@ double MoneyPerPriceUnitPerLot()
    return(tickValue/tickSize);
   }
 
-bool ExactLotSize(const double requested,double &lots)
+//+------------------------------------------------------------------+
+//| Resolve a requested volume onto the broker's lot grid.           |
+//|                                                                  |
+//| v6 rejected anything that did not land exactly on the step, so on |
+//| a broker whose MINLOT is 0.1 the default 0.01 meant the EA could  |
+//| never open a single position -- it ran for weeks showing REJECT   |
+//| in one dashboard field and nothing else.                         |
+//|                                                                  |
+//| Rounding DOWN can only reduce exposure below what was requested,  |
+//| so it is the safe direction. Below the broker minimum there is no |
+//| tradeable size at all, and that still fails.                     |
+//+------------------------------------------------------------------+
+bool ResolveLotSize(const double requested,double &lots)
   {
    lots=0.0;
    double minimum=MarketInfo(Symbol(),MODE_MINLOT);
    double maximum=MarketInfo(Symbol(),MODE_MAXLOT);
    double step=MarketInfo(Symbol(),MODE_LOTSTEP);
-   if(minimum<=0.0 || maximum<=0.0 || step<=0.0)
+   if(minimum<=0.0 || maximum<=0.0 || step<=0.0 || requested<=0.0)
       return(false);
+
    double tolerance=MathMax(1.0e-8,step*1.0e-6);
-   if(requested<minimum-tolerance || requested>maximum+tolerance)
+   double capped=MathMin(requested,maximum);
+   double executable=MathFloor(capped/step+tolerance)*step;
+
+   if(executable<minimum-tolerance)
       return(false);
-   double requestedSteps=requested/step;
-   double nearestSteps=MathRound(requestedSteps);
-   double executable=nearestSteps*step;
-   if(MathAbs(executable-requested)>tolerance)
-      return(false);
+
    lots=NormalizeDouble(executable,LotDigits());
-   return(MathAbs(lots-requested)<=tolerance);
+   return(lots>0.0);
+  }
+
+//+------------------------------------------------------------------+
+//| Resolve the volume and report any adjustment. Trade paths use     |
+//| this; the dashboard uses ResolveLotSize() directly so that        |
+//| refreshing the panel cannot spam the log.                        |
+//+------------------------------------------------------------------+
+bool ResolveLotSizeForTrade(const double requested,double &lots)
+  {
+   if(!ResolveLotSize(requested,lots))
+     {
+      Print("XVISION EMA50 V7: requested volume ",DoubleToString(requested,8),
+            " is below the broker minimum ",
+            DoubleToString(MarketInfo(Symbol(),MODE_MINLOT),8),
+            " or the lot grid is unavailable; trade rejected.");
+      return(false);
+     }
+   if(MathAbs(lots-requested)>1.0e-8)
+      Print("XVISION EMA50 V7: volume ",DoubleToString(requested,8),
+            " rounded down to ",DoubleToString(lots,LotDigits()),
+            " to fit the broker lot step of ",
+            DoubleToString(MarketInfo(Symbol(),MODE_LOTSTEP),8),".");
+   return(true);
   }
 
 int DecimalDigitsForValue(const double value)
@@ -1772,9 +1863,21 @@ string DashboardTextLimit(const string value,const int maximum=0)
    return(StringSubstr(value,0,budget-3)+"...");
   }
 
-string PositionSummary(double &floatingProfit)
+//+------------------------------------------------------------------+
+//| Summarise exposure, separating what this instance manages from    |
+//| what merely blocks it.                                            |
+//|                                                                  |
+//| HasEAExposure() blocks on any XVISION magic (50503001-50503006) or |
+//| any "XVE" comment, but ManageInputProtection() only trails orders  |
+//| carrying THIS instance's MagicNumber. So a leftover position from  |
+//| an earlier version stops new entries and is never given a         |
+//| trailing stop. Taking over another EA's orders would be worse, so  |
+//| the asymmetry stays -- but it is now reported instead of silent.   |
+//+------------------------------------------------------------------+
+string PositionSummary(double &floatingProfit,int &foreignCount)
   {
    floatingProfit=0.0;
+   foreignCount=0;
    int positionCount=0;
    string firstPosition="";
    for(int pos=OrdersTotal()-1; pos>=0; pos--)
@@ -1787,6 +1890,8 @@ string PositionSummary(double &floatingProfit)
          continue;
       floatingProfit+=OrderProfit()+OrderSwap()+OrderCommission();
       positionCount++;
+      if(OrderMagicNumber()!=MagicNumber)
+         foreignCount++;
       string side=(OrderType()==OP_BUY ? "BUY" : "SELL");
       if(firstPosition=="")
          firstPosition=side+"  #"+IntegerToString(OrderTicket())+"  lot "+
@@ -1846,11 +1951,12 @@ void UpdateDashboard(const bool force=false)
 
    RefreshRates();
    double floatingProfit=0.0;
-   string position=PositionSummary(floatingProfit);
+   int foreignPositions=0;
+   string position=PositionSummary(floatingProfit,foreignPositions);
    double spread=MathMax(0.0,Ask-Bid);
    bool spreadAllowed=(MaximumSpreadMovement<=0.0 || spread<=MaximumSpreadMovement);
    double executableLot=0.0;
-   bool lotAllowed=ExactLotSize(FixedLotSize,executableLot);
+   bool lotAllowed=ResolveLotSize(FixedLotSize,executableLot);
    bool tradingAllowed=(IsTradeAllowed() && !IsTradeContextBusy() &&
                         MarketInfo(Symbol(),MODE_TRADEALLOWED)>0.5);
    string episode=(g_episodeLocked ? "LOCKED" : "ARMED");
@@ -1889,8 +1995,11 @@ void UpdateDashboard(const bool force=false)
 
    SetDashboardLabel("H_TRADE","POSITION / PROTECTION",280,DashboardHeading,10);
    SetDashboardLabel("POSITION","Position: "+position+"  |  P/L "+
-                     (floatingProfit>=0.0 ? "+" : "")+DoubleToString(floatingProfit,2),
-                     298,(floatingProfit>=0.0 ? clrLime : clrTomato),10);
+                     (floatingProfit>=0.0 ? "+" : "")+DoubleToString(floatingProfit,2)+
+                     (foreignPositions>0 ? "  |  "+IntegerToString(foreignPositions)+
+                      " UNMANAGED (other magic)" : ""),
+                     298,(foreignPositions>0 ? clrOrange :
+                          (floatingProfit>=0.0 ? clrLime : clrTomato)),10);
    SetDashboardLabel("LOT","Requested lot  "+DoubleToString(FixedLotSize,LotDigits())+
                      "  |  executable  "+(lotAllowed ? DoubleToString(executableLot,LotDigits()) : "REJECT"),
                      316,(lotAllowed ? clrLime : clrTomato),10);
