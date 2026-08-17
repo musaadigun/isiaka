@@ -1,5 +1,12 @@
 # Code review — XVISION_Gold_EMA50_Directional_EA_v6.mq4
 
+> **Status:** the crash, all four critical findings, H1-H7 and M5 are fixed in
+> `MQL4/Experts/Isiaka/XVISION_Gold_EMA50_Directional_EA_v7.mq4`, across four
+> commits starting at `4279d35`. Still open: **M1, M2, M3, M6, M7, M8, M9** and
+> all of **L1-L7**. M1 (the two identical normalisation functions) and M2 (inputs
+> doing double duty) both need a decision about intent before they can be fixed
+> correctly, rather than a code change.
+
 1,657 lines, reviewed in full. Findings are ordered by severity. Nothing here was
 compiled — there is no MetaEditor on Linux — so each finding is marked with how it
 was established: **[read]** = certain from the source, **[log]** = needs a line
