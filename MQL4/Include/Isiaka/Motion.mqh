@@ -122,6 +122,69 @@ double IntrabarAcceleration(const int minutes)
   }
 
 //+------------------------------------------------------------------+
+//| SELF-CONTAINED velocity of the running candle, in $/hour.        |
+//|                                                                  |
+//|     V0 = (price_now - open[0]) / hours_elapsed_in_this_bar        |
+//|                                                                  |
+//| Uses only this candle's own open and the live price. No close[3], |
+//| no prior bar, nothing that survives the bar boundary. That is the |
+//| difference from the EA's PriceVelocityPerHour(), which spans 90   |
+//| minutes and whose current-candle content is only 37.3% of its     |
+//| variance.                                                         |
+//|                                                                   |
+//| THE DIVISOR IS THE HAZARD. Early in the bar hours_elapsed is tiny |
+//| and an ordinary tick becomes an enormous reading. Measured over   |
+//| 11,038 M30 candles, median |V0| against its settled value:        |
+//|                                                                   |
+//|      5 min in : 2.76x   corr 0.479   sign right 65.1%             |
+//|     10 min in : 1.87x   corr 0.632   sign right 71.9%             |
+//|     15 min in : 1.50x   corr 0.756   sign right 77.2%             |
+//|     20 min in : 1.25x   corr 0.861   sign right 82.0%             |
+//|     25 min in : 1.11x   corr 0.932   sign right 87.8%             |
+//|                                                                   |
+//| minimumSeconds rejects readings before that much of the bar has   |
+//| elapsed. 0 disables the guard and returns whatever the divisor    |
+//| produces - only sensible if the caller does its own gating.       |
+//| A third of the bar (600s on M30) is the point where the reading   |
+//| stops being dominated by its own denominator.                     |
+//+------------------------------------------------------------------+
+double CandleVelocityNow(const ENUM_TIMEFRAMES signalTf,
+                         const int minimumSeconds=600)
+  {
+   datetime barStart=iTime(Symbol(),signalTf,0);
+   if(barStart<=0)
+      return(0.0);
+
+   int elapsedSeconds=(int)(TimeCurrent()-barStart);
+   if(elapsedSeconds<=0 || elapsedSeconds<minimumSeconds)
+      return(0.0);
+
+   double barOpen=iOpen(Symbol(),signalTf,0);
+   double price  =iClose(Symbol(),signalTf,0);   // live price of the forming bar
+   if(barOpen<=0.0 || price<=0.0)
+      return(0.0);
+
+   return((price-barOpen)/(elapsedSeconds/3600.0));
+  }
+
+//+------------------------------------------------------------------+
+//| The same reading against what an ordinary bar manages, so the     |
+//| threshold does not need re-tuning when volatility changes. Gold's |
+//| median M30 ATR went from $4.40 to $13.87 across 2024-2026, so a   |
+//| fixed $/hour cutoff would have drifted badly over that period.    |
+//| Returns 1.0 when this candle is pacing exactly like a normal one. |
+//+------------------------------------------------------------------+
+double CandleVelocityRatio(const ENUM_TIMEFRAMES signalTf,const int atrPeriod,
+                           const int minimumSeconds=600)
+  {
+   double atr=iATR(Symbol(),signalTf,atrPeriod,1);
+   double barHours=PeriodSeconds(signalTf)/3600.0;
+   if(atr<=0.0 || barHours<=0.0)
+      return(0.0);
+   return(CandleVelocityNow(signalTf,minimumSeconds)/(atr/barHours));
+  }
+
+//+------------------------------------------------------------------+
 //| How far into the forming bar are we, 0.0 .. 1.0?                  |
 //| Study 12: the live reading correlates 0.801 with its settled      |
 //| value at 5 minutes into an M30 bar and 0.938 at the halfway mark, |
