@@ -1,7 +1,22 @@
 //+------------------------------------------------------------------+
-//|                 XVISION_Gold_EMA20_Directional_EA_v10.mq4        |
+//|                 XVISION_Gold_EMA20_Directional_EA_v11.mq4        |
 //|  EMA-20 crossing and first-retest entries on a configurable      |
 //|  signal timeframe.                                               |
+//|                                                                  |
+//|  v11 changes from audited v10:                                   |
+//|   - The retest engine works again. v10 granted a leg only after  |
+//|     full qualification, then locked the episode in the same      |
+//|     breath -- and v7's "pause while locked" guard, written for   |
+//|     the older auto-arming model, froze that leg until the lock   |
+//|     cleared. Any raw crossing in between reset it to IDLE, so    |
+//|     the first EMA touch was always missed. The stale guard is    |
+//|     gone; ownership alone gates the route.                       |
+//|   - A qualified crossing that takes NO entry no longer consumes  |
+//|     the episode in instant-cross mode. v10 locked out the live   |
+//|     path for g_quietBarsRequired bars after any crossing it had  |
+//|     missed, including later valid ones.                          |
+//|   - InstantCrossRetrySeconds has a floor of 1. At 0 the backoff  |
+//|     expired immediately and a failing send retried every tick.   |
 //|                                                                  |
 //|  v9 changes from audited v8:                                     |
 //|   - The prior moving-average period and its input are removed.    |
@@ -39,10 +54,10 @@
 //|   - The panel layout scales with the font size.                  |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "10.00"
+#property version   "11.00"
 #property description "Directional Gold EMA20 research EA with fixed two-bar gradient,"
 #property description "directional velocity/acceleration, range voting and retest protection."
-#property description "v10 adds instant entry at the live EMA20 cross instead of a confirmation bar."
+#property description "v11 audits v10: restores the retest route and the instant path after a missed cross."
 
 #define RESEARCH_EMA_PERIOD                 20
 #define RESEARCH_GRADIENT_LOOKBACK_BARS      2
@@ -149,7 +164,7 @@ datetime g_lastProcessedBar=0;
 datetime g_lastSignalBar=0;
 bool     g_episodeLocked=false;
 int      g_quietBars=0;
-string   g_lastDecision="Waiting for first completed M30 candle";
+string   g_lastDecision="Waiting for the first completed signal candle";
 double   g_lastSlope=0.0;
 double   g_lastDirectionalGradient=0.0;
 double   g_lastDirectionalVelocity=0.0;
@@ -283,7 +298,7 @@ int OnInit()
    SaveEpisodeState();
 
    UpdateDashboard(true);
-   Print("XVISION EMA20 V10 initialized on ",Symbol(),
+   Print("XVISION EMA20 V11 initialized on ",Symbol(),
          " timeframe=",TimeframeName(SignalTimeframe),
          " magic=",g_magic,
          " locked=",BoolText(g_episodeLocked),
@@ -337,7 +352,7 @@ void ClampInt(const string name,const int requested,const int low,
   {
    target=(int)MathMax(low,MathMin(high,requested));
    if(target!=requested)
-      Print("XVISION EMA20 V10: ",name," ",requested," clamped to ",target,".");
+      Print("XVISION EMA20 V11: ",name," ",requested," clamped to ",target,".");
   }
 
 void ClampDouble(const string name,const double requested,const double low,
@@ -345,7 +360,7 @@ void ClampDouble(const string name,const double requested,const double low,
   {
    target=MathMax(low,MathMin(high,requested));
    if(MathAbs(target-requested)>1.0e-12)
-      Print("XVISION EMA20 V10: ",name," ",DoubleToString(requested,4),
+      Print("XVISION EMA20 V11: ",name," ",DoubleToString(requested,4),
             " clamped to ",DoubleToString(target,4),".");
   }
 
@@ -382,8 +397,10 @@ void ResolveInputs()
    g_enableInstantCross=EnableInstantCrossEntry;
    ClampDouble("InstantCrossMinPenetrationATR",InstantCrossMinPenetrationATR,
                0.0,1000.0,g_instantMinPenATR);
+   // Minimum 1: at 0 the backoff expires the instant it is set, so a persistently
+   // failing send (bad stops, no margin) is retried on EVERY tick.
    ClampInt("InstantCrossRetrySeconds",InstantCrossRetrySeconds,
-            0,3600,g_instantRetrySeconds);
+            1,3600,g_instantRetrySeconds);
 
    g_enableRetest=EnableEMARetestEntry;
    ClampInt("RetestTrendClosesRequired",RetestTrendClosesRequired,2,10000,
@@ -426,7 +443,7 @@ void ResolveInputs()
    if(g_enableTrailing && g_trailDistance<=0.0)
      {
       g_enableTrailing=false;
-      Print("XVISION EMA20 V10: TrailingDistanceMoney must be positive; "
+      Print("XVISION EMA20 V11: TrailingDistanceMoney must be positive; "
             "trailing stop disabled for this session. Trading continues.");
      }
 
@@ -438,13 +455,13 @@ void ResolveInputs()
    if(g_enableProfitLock && g_lockTrigger<=0.0)
      {
       g_enableProfitLock=false;
-      Print("XVISION EMA20 V10: ProfitLockTriggerMoney must be positive; "
+      Print("XVISION EMA20 V11: ProfitLockTriggerMoney must be positive; "
             "profit lock disabled for this session. Trading continues.");
      }
    else if(g_enableProfitLock && g_lockMoney>=g_lockTrigger)
      {
       double reduced=g_lockTrigger*0.5;
-      Print("XVISION EMA20 V10: ProfitLockMoney ",DoubleToString(g_lockMoney,2),
+      Print("XVISION EMA20 V11: ProfitLockMoney ",DoubleToString(g_lockMoney,2),
             " is not below its trigger ",DoubleToString(g_lockTrigger,2),
             "; reduced to ",DoubleToString(reduced,2),".");
       g_lockMoney=reduced;
@@ -459,7 +476,7 @@ void ResolveInputs()
       g_tradingBlocked=true;
       g_blockReason="FixedLotSize "+DoubleToString(FixedLotSize,4)+
                     " is not tradeable on this symbol";
-      Print("XVISION EMA20 V10: ",g_blockReason,
+      Print("XVISION EMA20 V11: ",g_blockReason,
             " (min ",DoubleToString(MarketInfo(Symbol(),MODE_MINLOT),4),
             ", step ",DoubleToString(MarketInfo(Symbol(),MODE_LOTSTEP),4),
             "). The EA stays attached and will not trade until this is fixed.");
@@ -469,7 +486,7 @@ void ResolveInputs()
      {
       g_tradingBlocked=true;
       g_blockReason="RestrictToGoldSymbols is on and "+Symbol()+" is not a GOLD/XAU symbol";
-      Print("XVISION EMA20 V10: ",g_blockReason,
+      Print("XVISION EMA20 V11: ",g_blockReason,
             ". The EA stays attached and will not trade.");
      }
   }
@@ -496,7 +513,7 @@ void ResolveDashboardGeometry()
    if(g_panelFont!=DashboardFontSize || g_panelX!=DashboardX ||
       g_panelY!=DashboardY || g_panelWidth!=DashboardWidth ||
       g_panelHeight!=DashboardHeight || g_panelRefreshMs!=DashboardRefreshMs)
-      Print("XVISION EMA20 V10: dashboard settings clamped to x=",g_panelX,
+      Print("XVISION EMA20 V11: dashboard settings clamped to x=",g_panelX,
             " y=",g_panelY," w=",g_panelWidth," h=",g_panelHeight,
             " font=",g_panelFont," refresh=",g_panelRefreshMs,"ms",
             " (requested w=",DashboardWidth," h=",DashboardHeight,
@@ -661,7 +678,7 @@ void ProcessNewSignalBar()
 
    if(PrintSignalDiagnostics)
      {
-       Print("XVISION EMA20 V10 cross ",DirectionName(direction),
+       Print("XVISION EMA20 V11 cross ",DirectionName(direction),
             " time=",TimeToString(iTime(Symbol(),SignalTimeframe,1),TIME_DATE|TIME_MINUTES),
             " gradient=",DoubleToString(g_lastDirectionalGradient,4),
             " velocity=",DoubleToString(g_lastDirectionalVelocity,4),
@@ -697,15 +714,14 @@ void ProcessNewSignalBar()
                      " EMA20 leg; waiting for move-away";
      }
 
-   // A qualified crossing consumes the episode even if execution is blocked.
-   // This prevents late entry or another order from the same crossing cluster.
-   g_episodeLocked=true;
-   g_quietBars=0;
    g_lastSignalBar=iTime(Symbol(),SignalTimeframe,1);
-   SaveEpisodeState();
 
    if(HasEAExposure())
      {
+      // Exposure genuinely consumes the leg: lock so the same crossing cluster
+      // cannot stack a second order behind the one already open.
+      g_episodeLocked=true;
+      g_quietBars=0;
       g_lastDecision=route+" qualified but existing EA exposure blocked entry";
       g_retestState=RETEST_USED;
       g_retestStatus="Existing EA exposure consumed this trend leg";
@@ -715,16 +731,26 @@ void ProcessNewSignalBar()
 
    if(g_enableInstantCross)
      {
-      // The instant path owns market entries in this mode. A crossing
-      // that closed without being taken live is not re-offered a bar
-      // later - that would be the confirmation route by another name.
+      // The instant path owns market entries in this mode, and no order was
+      // placed on this close. v10 still locked the episode here, which disabled
+      // ProcessInstantCrossEntry() (it requires !g_episodeLocked) for the next
+      // g_quietBarsRequired bars -- so one crossing the live path happened to
+      // miss also blacked out every LATER crossing in that window.
+      //
+      // Not locking cannot re-fire THIS crossing: the instant test demands
+      // close[1] on the old side of the EMA, and this bar has now closed
+      // across. Only a genuinely new crossing can trigger it.
       g_lastDecision=route+" "+DirectionName(direction)+
                      " qualified on close; instant-cross mode took no late entry";
-      g_retestStatus="Instant-cross mode: retest still owns this leg";
+      g_retestStatus="Instant-cross mode: retest owns this leg";
       SaveEpisodeState();
       return;
      }
 
+   // The confirmation route is about to hold a live market setup, so the leg
+   // is consumed from here even if that entry is later skipped.
+   g_episodeLocked=true;
+   g_quietBars=0;
    g_marketEntryPending=true;
    g_marketEntryDirection=direction;
    g_marketEntryRoute=MARKET_ROUTE_RESEARCH;
@@ -816,7 +842,7 @@ void ProcessInstantCrossEntry()
      }
 
    if(PrintSignalDiagnostics)
-      Print("XVISION EMA20 V10 instant cross ",DirectionName(direction),
+      Print("XVISION EMA20 V11 instant cross ",DirectionName(direction),
             " price=",DoubleToString(price,Digits),
             " ema=",DoubleToString(emaLive,Digits),
             " penetrationATR=",DoubleToString(penetrationATR,4),
@@ -953,7 +979,7 @@ void ProcessPendingMarketEntry()
      }
 
    if(PrintSignalDiagnostics)
-      Print("XVISION EMA20 V10 confirmation ",DirectionName(direction),
+      Print("XVISION EMA20 V11 confirmation ",DirectionName(direction),
             " time=",TimeToString(iTime(Symbol(),SignalTimeframe,1),TIME_DATE|TIME_MINUTES),
             " distanceATR=",DoubleToString(entryDistanceATR,4),
             " capATR=",DoubleToString(g_maxMarketEntryDistanceATR,4),
@@ -1082,9 +1108,6 @@ string RetestStateName()
    return("IDLE");
   }
 
-//+------------------------------------------------------------------+
-//| Identify a V6 retest order selected in the terminal order pool. |
-//+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| Identify an order belonging to this EA instance.                 |
 //|                                                                  |
@@ -1361,7 +1384,7 @@ bool PlaceRetestPending(const int direction)
    if(AccountFreeMarginCheck(Symbol(),marketCommand,lots)<=0.0)
      {
       ResetLastError();
-      Print("XVISION EMA20 V10: free margin would not support ",
+      Print("XVISION EMA20 V11: free margin would not support ",
             DoubleToString(lots,LotDigits())," lots right now; placing the pending "
             "anyway since margin is only required if it triggers.");
      }
@@ -1396,7 +1419,7 @@ bool PlaceRetestPending(const int direction)
       if(expiryError==ERR_TRADE_EXPIRATION_DENIED ||
          expiryError==ERR_INVALID_TRADE_PARAMETERS)
         {
-         Print("XVISION EMA20 V10: broker refused pending expiry (error=",expiryError,
+         Print("XVISION EMA20 V11: broker refused pending expiry (error=",expiryError,
                "); resending without it and expiring locally after ",
                g_retestExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
          serverExpiryRequested=false;
@@ -1410,7 +1433,7 @@ bool PlaceRetestPending(const int direction)
 
    if(ticket<0)
      {
-      Print("XVISION EMA20 V10: retest pending failed error=",GetLastError(),
+      Print("XVISION EMA20 V11: retest pending failed error=",GetLastError(),
             " entry=",DoubleToString(entry,Digits));
       g_lastDecision="RETEST qualified; pending order failed";
       return(false);
@@ -1426,7 +1449,7 @@ bool PlaceRetestPending(const int direction)
          // The broker accepted the order but dropped the expiry silently, which
          // is different from refusing it up front. Fall back to local expiry
          // rather than deleting a live stop order.
-         Print("XVISION EMA20 V10: pending #",ticket," was accepted without the "
+         Print("XVISION EMA20 V11: pending #",ticket," was accepted without the "
                "requested server expiry; it will be expired locally after ",
                g_retestExpiryBars," ",TimeframeName(SignalTimeframe)," bars.");
         }
@@ -1443,7 +1466,7 @@ bool PlaceRetestPending(const int direction)
                   IntegerToString(ticket)+" at "+DoubleToString(entry,Digits)+
                   (expiryVerified ? "" : " (local expiry)");
    g_lastDecision="RETEST "+DirectionName(direction)+" confirmation pending";
-   Print("XVISION EMA20 V10: retest pending ticket=",ticket,
+   Print("XVISION EMA20 V11: retest pending ticket=",ticket,
          " direction=",DirectionName(direction),
          " entry=",DoubleToString(entry,Digits),
          " expires after ",g_retestExpiryBars," ",
@@ -1484,17 +1507,18 @@ bool ProcessRetestState(const bool rawCross,const int crossDirection)
       return(false);
      }
 
-   // v6 advanced -- and could fire -- the retest sequence while the episode was
-   // locked, because ProcessRetestState() runs before the lock check in
-   // ProcessNewSignalBar(). A leg whose crossing was never traded or even
-   // assessed could therefore still produce an entry once the lock cleared.
-   // A raw cross above still resets the leg; only the advance is paused.
-   if(g_episodeLocked)
-     {
-      g_retestStatus="Retest paused: episode is locked";
-      return(false);
-     }
-
+   // v7 paused the retest here whenever the episode was locked, because in v6
+   // ANY raw crossing auto-armed a leg and the pause was the only thing keeping
+   // an unassessed leg from firing. v9 replaced that with an ownership model:
+   // the raw-cross branch above now clears the leg outright, and only a fully
+   // qualified crossing in ProcessNewSignalBar() grants one.
+   //
+   // Carrying the pause forward on top of the ownership model killed the route.
+   // ProcessNewSignalBar() locks the episode in the same breath as it grants the
+   // leg, so the sequence was frozen for g_quietBarsRequired bars, during which
+   // any raw crossing reset it to IDLE and the first EMA touch -- the entire
+   // point of the route -- came and went unseen. The retest could effectively
+   // never reach ARMED. The pause is removed; ownership does its job.
    if(g_retestState==RETEST_IDLE || g_retestState==RETEST_PENDING ||
       g_retestState==RETEST_USED || g_retestDirection==0)
       return(false);
@@ -1643,7 +1667,7 @@ void ManageRetestOrders()
       ResetLastError();
       if(OrderDelete(ticket,clrSilver))
         {
-         Print("XVISION EMA20 V10: deleted retest pending #",ticket,
+         Print("XVISION EMA20 V11: deleted retest pending #",ticket,
                " reason=",cancelReason);
          pendingCount--;
          if(g_retestTicket==ticket)
@@ -1656,7 +1680,7 @@ void ManageRetestOrders()
         }
       else if(TimeCurrent()-g_lastManagementErrorPrint>=30)
         {
-         Print("XVISION EMA20 V10: pending deletion failed #",ticket,
+         Print("XVISION EMA20 V11: pending deletion failed #",ticket,
                " error=",GetLastError());
          g_lastManagementErrorPrint=TimeCurrent();
         }
@@ -1772,14 +1796,14 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
   {
    if(g_tradingBlocked)
      {
-      Print("XVISION EMA20 V10: entry suppressed -- ",g_blockReason);
+      Print("XVISION EMA20 V11: entry suppressed -- ",g_blockReason);
       return(false);
      }
 
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
      {
-       Print("XVISION EMA20 V10: trade context is not available.");
+       Print("XVISION EMA20 V11: trade context is not available.");
       return(false);
      }
 
@@ -1790,7 +1814,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    double spread=MathMax(0.0,Ask-Bid);
    if(g_maxSpread>0.0 && spread>g_maxSpread)
      {
-       Print("XVISION EMA20 V10: entry skipped; spread ",DoubleToString(spread,Digits),
+       Print("XVISION EMA20 V11: entry skipped; spread ",DoubleToString(spread,Digits),
             " exceeds ",DoubleToString(g_maxSpread,Digits));
       return(false);
      }
@@ -1800,7 +1824,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if(g_maxEntryDeviation>0.0 &&
       MathAbs(entry-signalClose)>g_maxEntryDeviation)
      {
-       Print("XVISION EMA20 V10: entry skipped; deviation from signal close is ",
+       Print("XVISION EMA20 V11: entry skipped; deviation from signal close is ",
             DoubleToString(MathAbs(entry-signalClose),Digits));
       return(false);
      }
@@ -1816,7 +1840,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
       double moneyPerPricePerLot=MoneyPerPriceUnitPerLot();
       if(moneyPerPricePerLot<=0.0)
         {
-         Print("XVISION EMA20 V10: broker tick value/tick size is unavailable.");
+         Print("XVISION EMA20 V11: broker tick value/tick size is unavailable.");
          return(false);
         }
       if(g_stopLossMoney>0.0)
@@ -1829,7 +1853,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if((stopDistance>0.0 && stopDistance<minimumDistance) ||
       (targetDistance>0.0 && targetDistance<minimumDistance))
      {
-      Print("XVISION EMA20 V10: requested SL/TP is inside the broker stop level.");
+      Print("XVISION EMA20 V11: requested SL/TP is inside the broker stop level.");
       return(false);
      }
 
@@ -1844,14 +1868,14 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if((stopDistance>0.0 && stopLoss<=0.0) ||
       (targetDistance>0.0 && takeProfit<=0.0))
      {
-      Print("XVISION EMA20 V10: protected price normalization failed.");
+      Print("XVISION EMA20 V11: protected price normalization failed.");
       return(false);
      }
    entry=NormalizeDouble(entry,Digits);
    if((stopLoss>0.0 && MathAbs(entry-stopLoss)+Point*0.1<minimumDistance) ||
       (takeProfit>0.0 && MathAbs(takeProfit-entry)+Point*0.1<minimumDistance))
      {
-      Print("XVISION EMA20 V10: tick rounding breached the broker stop level.");
+      Print("XVISION EMA20 V11: tick rounding breached the broker stop level.");
       return(false);
      }
    bool marketLevelsInvalid=
@@ -1863,13 +1887,13 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
         (takeProfit>0.0 && takeProfit>Ask-minimumDistance)));
    if(marketLevelsInvalid)
      {
-      Print("XVISION EMA20 V10: requested protection is too close to the executable market side.");
+      Print("XVISION EMA20 V11: requested protection is too close to the executable market side.");
       return(false);
      }
 
    if(AccountFreeMarginCheck(Symbol(),command,lots)<=0.0)
      {
-      Print("XVISION EMA20 V10: insufficient free margin.");
+      Print("XVISION EMA20 V11: insufficient free margin.");
       return(false);
      }
 
@@ -1881,7 +1905,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
    if(ticket<0)
      {
       int error=GetLastError();
-      Print("XVISION EMA20 V10: OrderSend failed error=",error,
+      Print("XVISION EMA20 V11: OrderSend failed error=",error,
             " direction=",DirectionName(direction),
             " entry=",DoubleToString(entry,Digits),
             " SL=",DoubleToString(stopLoss,Digits),
@@ -1889,7 +1913,7 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
       return(false);
      }
 
-   Print("XVISION EMA20 V10: opened ticket=",ticket,
+   Print("XVISION EMA20 V11: opened ticket=",ticket,
          " route=",route,
          " direction=",DirectionName(direction),
          " lots=",DoubleToString(lots,LotDigits()),
@@ -1900,7 +1924,15 @@ bool OpenDirectionalTrade(const int direction,const string route,const double si
   }
 
 //+------------------------------------------------------------------+
-//| Round an SL toward safety so requested risk/lock is not weakened.|
+//| Snap a price to the broker tick grid, always in the direction    |
+//| that favours the trade: up for a BUY, down for a SELL.           |
+//|                                                                  |
+//| v6 had this body duplicated under two names with contradictory   |
+//| comments, which read like a bug. It is not one -- the single     |
+//| rule is correct for all four cases. BUY stop sits below entry so |
+//| rounding up tightens risk; BUY target sits above so rounding up  |
+//| widens reward. SELL mirrors both. Never risk more, never bank    |
+//| less, than the user asked for.                                   |
 //+------------------------------------------------------------------+
 double NormalizeProtectiveStop(const double price,const int orderType)
   {
@@ -1916,19 +1948,14 @@ double NormalizeProtectiveStop(const double price,const int orderType)
   }
 
 //+------------------------------------------------------------------+
-//| Round a target outward so tick rounding cannot reduce distance. |
+//| Targets use the same rounding, and that is correct rather than a |
+//| copy-paste slip -- see the note above NormalizeProtectiveStop(). |
+//| Kept as a separate name so call sites still read intelligibly,   |
+//| but sharing one body so the two can never drift apart.           |
 //+------------------------------------------------------------------+
 double NormalizeTargetPrice(const double price,const int orderType)
   {
-   double tickSize=MarketInfo(Symbol(),MODE_TICKSIZE);
-   if(tickSize<=0.0)
-      tickSize=Point;
-   if(tickSize<=0.0)
-      return(0.0);
-   double ticks=price/tickSize;
-   double normalized=(orderType==OP_BUY ? MathCeil(ticks)*tickSize :
-                                           MathFloor(ticks)*tickSize);
-   return(NormalizeDouble(normalized,Digits));
+   return(NormalizeProtectiveStop(price,orderType));
   }
 
 //+------------------------------------------------------------------+
@@ -2020,7 +2047,7 @@ void ManageInputProtection()
       ResetLastError();
       if(OrderModify(ticket,OrderOpenPrice(),candidate,OrderTakeProfit(),0,clrGold))
         {
-         Print("XVISION EMA20 V10: ",source," moved ticket=",ticket,
+         Print("XVISION EMA20 V11: ",source," moved ticket=",ticket,
                " SL to ",DoubleToString(candidate,Digits),
                " at net profit ",DoubleToString(netProfit,2)," ",AccountCurrency());
         }
@@ -2029,7 +2056,7 @@ void ManageInputProtection()
          int error=GetLastError();
          if(TimeCurrent()-g_lastManagementErrorPrint>=30)
            {
-            Print("XVISION EMA20 V10: protection modification failed ticket=",ticket,
+            Print("XVISION EMA20 V11: protection modification failed ticket=",ticket,
                   " error=",error," requested SL=",DoubleToString(candidate,Digits));
             g_lastManagementErrorPrint=TimeCurrent();
            }
@@ -2142,14 +2169,14 @@ bool ResolveLotSizeForTrade(const double requested,double &lots)
   {
    if(!ResolveLotSize(requested,lots))
      {
-      Print("XVISION EMA20 V10: requested volume ",DoubleToString(requested,8),
+      Print("XVISION EMA20 V11: requested volume ",DoubleToString(requested,8),
             " is below the broker minimum ",
             DoubleToString(MarketInfo(Symbol(),MODE_MINLOT),8),
             " or the lot grid is unavailable; trade rejected.");
       return(false);
      }
    if(MathAbs(lots-requested)>1.0e-8)
-      Print("XVISION EMA20 V10: volume ",DoubleToString(requested,8),
+      Print("XVISION EMA20 V11: volume ",DoubleToString(requested,8),
             " rounded down to ",DoubleToString(lots,LotDigits()),
             " to fit the broker lot step of ",
             DoubleToString(MarketInfo(Symbol(),MODE_LOTSTEP),8),".");
@@ -2192,7 +2219,9 @@ bool IsGoldSymbol()
 
 string DirectionName(const int direction)
   {
-   return(direction>0 ? "BUY" : "SELL");
+   if(direction>0) return("BUY");
+   if(direction<0) return("SELL");
+   return("NONE");      // g_retestDirection is legitimately 0 when idle
   }
 
 string BoolText(const bool value)
