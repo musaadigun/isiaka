@@ -1,81 +1,92 @@
 //+------------------------------------------------------------------+
 //| supergold.mq4                                                    |
-//| Two XVISION engines behind one ActiveEngine switch.              |
 //|                                                                  |
-//|   XVISION_GOLDSCALPER_V11   GoldScalper M1/M5 v11                |
-//|   XVISION_EMA20_DIRECTIONAL EMA20 crossing / retest engine       |
+//| ONE expert advisor with two signal modules. Both run on every    |
+//| tick; neither is an alternative to the other.                    |
 //|                                                                  |
-//| Exactly one engine initialises and trades per chart. OnInit,     |
-//| OnDeinit, OnTick and OnTimer all dispatch on ActiveEngine, so a  |
-//| dormant engine never reads a quote, places an order, writes a    |
-//| global variable or draws an object.                              |
+//|   Scalper module   M1 trigger with M5 context, five-mode regime  |
+//|                    router, CUSUM burst detector, momentum and    |
+//|                    fade entries, blackout schedules, daily cap,  |
+//|                    consecutive-loss pause, ledger and dataset.   |
+//|                    Magic 26082601.                                |
 //|                                                                  |
-//| ALL SPEED AND ACCELERATION LOGIC HAS BEEN REMOVED                |
+//|   EMA20 module     EMA20 crossing on a configurable signal        |
+//|                    timeframe, with instant-cross entry, one-bar  |
+//|                    confirmation entry and a first-retest pending  |
+//|                    order route. Magic 50503006.                   |
 //|                                                                  |
-//| SuperScalper v5 was deleted outright rather than left inert.     |
-//| Its entry decision WAS its velocity snapshot -                   |
-//| SSV5_VelocityEntryMode() read .valid, .direction, .m5Ready,      |
-//| .qualified and .m1NonHostile, and with those gone it could only  |
-//| ever return ENTRY_NONE. Keeping it would have meant ~4,000 lines |
-//| that compile, initialise, persist state and never trade.         |
+//| EnableScalperModule and EnableEMA20Module switch a module OFF.   |
+//| They do not choose between two experts - there is no longer an   |
+//| ActiveEngine input and no engine enum.                           |
 //|                                                                  |
-//| GoldScalper v11 lost its two velocity filters, GSV11_MinM1-      |
-//| Strength and GSV11_RequireM5Alignment (both already default-off, |
-//| so little live change), and the speed and accel terms inside the |
-//| five-mode regime classifier in GSV11_UpdateModes.                |
+//| HOW THE TWO COEXIST                                              |
+//| Each module keeps its own entry rules, its own trade management, |
+//| its own persistence keys and its own magic number, and each      |
+//| touches only orders carrying its own magic. Nothing was merged   |
+//| away to make them fit: both keep their separate lot sizing, stop |
+//| arithmetic, slippage handling and panel, because their stop and  |
+//| target semantics genuinely differ - the scalper works in absolute|
+//| gold price, the EMA20 module in account currency.                |
 //|                                                                  |
-//|   THE COMPOSITES STAY. GSV11_g_m1Comp and _m5Comp are ATR-       |
-//|   normalised DIRECTIONAL displacement, not speed readings; the   |
-//|   'eff' and 'agree' terms read their direction. Only the two     |
-//|   magnitude readings derived from them were removed. Regime      |
-//|   routing will classify differently than before - that change is |
-//|   untested and worth a Strategy Tester comparison.               |
+//| Two consequences follow, and both are handled explicitly:        |
 //|                                                                  |
-//| The EMA20 engine lost MinimumDirectionalVelocity and its five    |
-//| gate sites. Crossings now qualify on gradient and range votes    |
-//| alone. Its acceleration filter had already gone in v12.          |
+//|  1. EXPOSURE ADDS UP. With both modules on, both can hold a      |
+//|     position at once - two positions in gold, two lots of risk.  |
+//|     OnePositionAcrossModules caps the EA at one open position    |
+//|     across both. It defaults to OFF, because ON would change     |
+//|     each module's behaviour from what it does alone.             |
 //|                                                                  |
-//| Why: measured over 3,239 EMA20 crossings on two years of M30     |
-//| gold, velocity's top decile scored 41.6% on +$5 before -$5       |
-//| against a 44.0-53.1% random band - BELOW random - and its sign   |
-//| agreed with the next bar's direction 48.8% of the time. It is a  |
-//| coherent state (lag-1 autocorrelation +0.660) but it describes   |
-//| the past rather than predicting the next move.                   |
+//|  2. THE PANELS OVERLAP. The scalper panel is 430 wide at (10,14) |
+//|     and the EMA20 panel defaults to (12,24). When both modules   |
+//|     are live the EMA20 panel is nudged clear of the scalper's,   |
+//|     unless DashboardX already places it past that edge.          |
 //|                                                                  |
-//| MERGE NOTES                                                      |
-//| The EMA20 engine is v12, NOT the v10 that was supplied. v10      |
-//| carried three critical defects found in audit: a retest engine   |
-//| that could never reach ARMED, an instant-cross path that blacked |
-//| itself out for four bars after any crossing it missed, and a     |
-//| retry interval clampable to zero that resends a failing order    |
-//| every tick.                                                      |
+//| LIFECYCLE                                                        |
+//| OnInit never returns a non-zero value. A module that fails to    |
+//| initialise is marked not-ready and skipped for the session while |
+//| the other keeps running; in MT4 a non-zero return removes the    |
+//| expert from the chart, and one bad input should not do that.     |
+//| Only the scalper installs a timer, so OnTimer drives it alone.   |
 //|                                                                  |
-//| Every EMA20 identifier except its inputs carries an EMA20_       |
-//| prefix, matching the GSV11_ convention. Input NAMES are          |
+//| NO SPEED OR ACCELERATION LOGIC REMAINS                           |
+//| SuperScalper v5 was removed entirely: its entry decision WAS its |
+//| velocity snapshot, so stripped of motion it could never trade.   |
+//| The scalper lost its two velocity filters and the speed/accel    |
+//| terms in its regime classifier; its M1/M5 composites stay, being |
+//| directional displacement rather than speed readings. The EMA20   |
+//| module lost MinimumDirectionalVelocity and its five gate sites,  |
+//| having already lost acceleration in v12. Crossings now qualify   |
+//| on gradient and range votes alone.                                |
+//|                                                                  |
+//| Why: over 3,239 EMA20 crossings on two years of M30 gold,        |
+//| velocity's top decile scored 41.6% on +$5 before -$5 against a   |
+//| 44.0-53.1% random band - below random - and its sign agreed with |
+//| the next bar 48.8% of the time.                                  |
+//|                                                                  |
+//| The EMA20 module is v12: v10 plus three audit fixes (a retest    |
+//| engine that could never arm, an instant-cross path that blacked  |
+//| itself out for four bars, and a retry interval clampable to zero)|
+//| plus the acceleration removal. Its identifiers carry an EMA20_   |
+//| prefix and the scalper's a GSV11_ prefix; input NAMES are        |
 //| unchanged so existing .set files still load.                     |
-//|                                                                  |
-//| The engine enum keeps a gap at 1 where SuperScalper used to sit, |
-//| so XVISION_EMA20_DIRECTIONAL stays on the value 2 that saved     |
-//| .set files store.                                                |
-//|                                                                  |
-//| Magic numbers 26082601 and 50503006 are distinct, so neither     |
-//| engine can adopt the other's positions. Panel object prefixes    |
-//| GSA_PANEL_ and XVE9_PANEL_ are distinct. The EMA20 engine        |
-//| installs no timer, so its branch of OnTimer returns.             |
 //+------------------------------------------------------------------+
 #property strict
 #property version   "2.00"
 #property description "XVISION Consolidated Scraper V2: complete Version 11 and SuperScalper v5 engines."
 
-enum XvisionConsolidatedEngine
-  {
-   XVISION_GOLDSCALPER_V11=0,
-   // 1 was XVISION_SUPERSCALPER_V5, removed. The gap is deliberate: it keeps
-   // XVISION_EMA20_DIRECTIONAL on the value 2 that saved .set files store.
-   XVISION_EMA20_DIRECTIONAL=2
-  };
+//--- Modules ---------------------------------------------------------------
+// Both modules are part of one EA and both run on every tick. These switches
+// turn a module off; they do NOT select between two experts. With both on, the
+// scalper works M1/M5 while the EMA20 module works its own signal timeframe,
+// and each manages only the orders carrying its own magic number.
+input bool   EnableScalperModule        = true;  // GoldScalper M1/M5 signal module
+input bool   EnableEMA20Module          = true;  // EMA20 crossing / retest module
 
-input XvisionConsolidatedEngine ActiveEngine=XVISION_GOLDSCALPER_V11;
+// Each module keeps its own exposure rules, so by default they can hold a
+// position at the same time - that is two positions in gold, and the risk adds
+// up. Turn this on to allow only one open position across the whole EA,
+// whichever module gets there first.
+input bool   OnePositionAcrossModules   = false; // one position for the whole EA
 
 // ================= GoldScalper M1/M5 Version 11 =================
 //+------------------------------------------------------------------+
@@ -1510,6 +1521,8 @@ bool GSV11_EntryAllowed(const int dir,string &blocker)
    if(dir<0 && !GSV11_ALLOW_SHORTS) { blocker="shorts disabled"; return(false); }
    if(!IsTesting() && !IsTradeAllowed()) { blocker="AutoTrading off"; return(false); }
    if(GSV11_FindManagedTicket()>=0) { blocker="position open"; return(false); }
+   if(SG_ForeignModulePositionOpen(GSV11_MAGIC_NUMBER))
+      { blocker="EMA20 module holds the position"; return(false); }
 
    datetime now=TimeCurrent();
    if(GSV11_BlackoutActive(now)) { blocker="news blackout"; return(false); }
@@ -2484,6 +2497,22 @@ void EMA20_ResolveDashboardGeometry()
    EMA20_g_panelX     =(int)MathMax(0,DashboardX);
    EMA20_g_panelY     =(int)MathMax(0,DashboardY);
 
+   // Both modules draw a panel and both default to roughly the same corner:
+   // the scalper sits at (10,14) and is 430 wide, this one at (12,24). When
+   // both are live, shift this panel clear of it instead of stacking two
+   // unreadable overlays. Moving DashboardX past the scalper panel yourself
+   // disables the nudge.
+   if(EnableScalperModule && EnableEMA20Module)
+     {
+      int clearOf=GSV11_PANEL_LEFT+GSV11_PANEL_WIDTH+12;
+      if(EMA20_g_panelX<clearOf)
+        {
+         EMA20_g_panelX=clearOf;
+         Print("SUPERGOLD: EMA20 panel moved to x=",EMA20_g_panelX,
+               " so it does not sit on top of the scalper panel.");
+        }
+     }
+
    // The tallest hand-placed row sits at y=431; leave room for it plus padding.
    int requiredHeight=EMA20_PanelRow(431)+EMA20_g_panelFont*2+16;
    int requiredWidth =(int)MathMax(200,EMA20_PanelRow(200));
@@ -3234,6 +3263,9 @@ bool EMA20_PlaceRetestPending(const int direction)
    if(EMA20_g_tradingBlocked)
      { EMA20_g_lastDecision="RETEST suppressed: "+EMA20_g_blockReason; return(false); }
 
+   if(SG_ForeignModulePositionOpen(MagicNumber))
+     { EMA20_g_lastDecision="RETEST held: scalper module holds the position"; return(false); }
+
    if(!IsTradeAllowed() || IsTradeContextBusy() ||
       MarketInfo(Symbol(),MODE_TRADEALLOWED)<0.5)
      { EMA20_g_lastDecision="RETEST rejected: trade context unavailable"; return(false); }
@@ -3706,6 +3738,12 @@ bool EMA20_OpenDirectionalTrade(const int direction,const string route,const dou
    if(EMA20_g_tradingBlocked)
      {
       Print("XVISION EMA20 V12: entry suppressed -- ",EMA20_g_blockReason);
+      return(false);
+     }
+
+   if(SG_ForeignModulePositionOpen(MagicNumber))
+     {
+      EMA20_g_lastDecision="Entry held: scalper module holds the position";
       return(false);
      }
 
@@ -4550,31 +4588,97 @@ void EMA20_UpdateDashboard(const bool force=false)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Consolidated event router                                        |
+//| Shared exposure coordination                                     |
 //|                                                                  |
-//| One engine per chart, chosen by ActiveEngine. Add an engine by   |
-//| extending the enum and adding a branch to all four handlers.     |
+//| Each module scopes its own exposure checks to its own magic, so   |
+//| left alone they trade independently and can both be in the market |
+//| at once. This is the only place the two are coupled, and it stays |
+//| inert unless OnePositionAcrossModules is switched on - so the     |
+//| default preserves each module's original behaviour exactly.       |
 //+------------------------------------------------------------------+
+bool SG_ForeignModulePositionOpen(const int callerMagic)
+  {
+   if(!OnePositionAcrossModules)
+      return(false);
+
+   for(int i=OrdersTotal()-1; i>=0; i--)
+     {
+      if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES))
+         continue;
+      if(OrderSymbol()!=Symbol())
+         continue;
+      int t=OrderType();
+      if(t!=OP_BUY && t!=OP_SELL && t!=OP_BUYSTOP && t!=OP_SELLSTOP)
+         continue;
+      int m=OrderMagicNumber();
+      if(m==callerMagic)
+         continue;
+      if(m==GSV11_MAGIC_NUMBER || m==MagicNumber)
+         return(true);
+     }
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+//| Unified event handlers                                           |
+//|                                                                  |
+//| One EA, two signal modules, both live on every tick.             |
+//|                                                                  |
+//| OnInit never returns a non-zero value. A module that fails to     |
+//| initialise is marked not-ready and skipped; the other still runs. |
+//| In MT4 a non-zero return removes the expert from the chart, and   |
+//| one module's bad input should not take the whole EA down.        |
+//+------------------------------------------------------------------+
+bool SG_g_scalperReady=false;
+bool SG_g_ema20Ready=false;
+
 int OnInit()
   {
-   if(ActiveEngine==XVISION_EMA20_DIRECTIONAL) return(EMA20_OnInit());
-   return(GSV11_OnInit());
+   SG_g_scalperReady=false;
+   SG_g_ema20Ready=false;
+
+   if(EnableScalperModule)
+     {
+      SG_g_scalperReady=(GSV11_OnInit()==INIT_SUCCEEDED);
+      if(!SG_g_scalperReady)
+         Print("SUPERGOLD: scalper module failed to initialise and is disabled "
+               "for this session; see the messages above. The EA stays attached.");
+     }
+
+   if(EnableEMA20Module)
+     {
+      SG_g_ema20Ready=(EMA20_OnInit()==INIT_SUCCEEDED);
+      if(!SG_g_ema20Ready)
+         Print("SUPERGOLD: EMA20 module failed to initialise and is disabled "
+               "for this session. The EA stays attached.");
+     }
+
+   if(!SG_g_scalperReady && !SG_g_ema20Ready)
+      Print("SUPERGOLD: no module is active. Enable one in the inputs.");
+   else
+      Print("SUPERGOLD initialised on ",Symbol(),
+            "  scalper=",(SG_g_scalperReady?"on":"off"),
+            "  ema20=",(SG_g_ema20Ready?"on":"off"),
+            "  sharedExposureCap=",(OnePositionAcrossModules?"on":"off"));
+
+   return(INIT_SUCCEEDED);
   }
+
 void OnDeinit(const int reason)
   {
-   if(ActiveEngine==XVISION_EMA20_DIRECTIONAL) EMA20_OnDeinit(reason);
-   else                                        GSV11_OnDeinit(reason);
+   if(SG_g_scalperReady) GSV11_OnDeinit(reason);
+   if(SG_g_ema20Ready)   EMA20_OnDeinit(reason);
   }
+
 void OnTick()
   {
-   if(ActiveEngine==XVISION_EMA20_DIRECTIONAL) EMA20_OnTick();
-   else                                        GSV11_OnTick();
+   if(SG_g_scalperReady) GSV11_OnTick();
+   if(SG_g_ema20Ready)   EMA20_OnTick();
   }
+
 void OnTimer()
   {
-   // The EMA20 engine is tick-driven and installs no timer, so its
-   // branch does nothing rather than falling through to GoldScalper.
-   if(ActiveEngine==XVISION_EMA20_DIRECTIONAL) return;
-   GSV11_OnTimer();
+   // Only the scalper installs a timer; the EMA20 module is tick-driven.
+   if(SG_g_scalperReady) GSV11_OnTimer();
   }
 //+------------------------------------------------------------------+
